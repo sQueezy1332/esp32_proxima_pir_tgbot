@@ -369,17 +369,7 @@ __attribute__((weak)) bool ble_advertising(const byte* ble_data, const byte ble_
 	return true;
 }
 
-String create_hex_string(const byte* const& buf, const byte data_size) {
-	String str("", data_size * 3 - 1);
-	char* offset = &str[0]; uint32_t i = 0;
-	for (; i < data_size - 1; i++, offset += 3) {
-		sprintf(offset, "%02X ", buf[i]);
-	}
-	sprintf(offset, "%02X", buf[i]); //DEBUGLN(str.length());
-	return str;
-}
-
-bool validate_hex_string(fb::Update& u, byte sub, byte*& data, byte data_len) {
+__attribute__((unused)) bool validate_hex_string(fb::Update& u, byte sub, byte*& data, byte data_len) {
 	uint32_t str_len = u.message().text().length(), hex_len = (str_len + 1 - sub) / 3; DEBUGLN(hex_len);
 	if (hex_len < 6 || hex_len > 251 || u.message().text()[str_len] == ' ') return false;
 	for (uint32_t i = sub - sizeof('\0'); i < str_len; i += 3)
@@ -389,6 +379,16 @@ bool validate_hex_string(fb::Update& u, byte sub, byte*& data, byte data_len) {
 	for (uint32_t offset = sub, i = 0; i < hex_len; offset += 3, i++) {
 		data[i] = strtoul(&u.message().text()._str[offset], NULL, HEX);
 	}return true;
+}
+
+String create_hex_string(const byte* const& buf, const byte data_size) {
+	String str("", data_size * 3 - 1);
+	char* offset = &str[0]; uint32_t i = 0;
+	for (; i < data_size - 1; i++, offset += 3) {
+		sprintf(offset, "%02X ", buf[i]);
+	}
+	sprintf(offset, "%02X", buf[i]); //DEBUGLN(str.length());
+	return str;
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
