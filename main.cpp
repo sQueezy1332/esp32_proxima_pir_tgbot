@@ -63,8 +63,8 @@ void setup() {
 #else
 	dWrite(PIN_LED, LED_OFF);
 #endif
-	if (img_state() == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(((String)"ESP_OTA_IMG_PENDING_VERIFY\n" + __DATE__ + '\t' + __TIME__), CHAT_ID)); 
-	while (last_interrupt == 0 && uS < 2400000){}; //vTaskDelayUntil(&wake, pdMS_TO_TICKS(2500)); status = LINE_OK;
+	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(((String)"ESP_OTA_IMG_PENDING_VERIFY\n" + __DATE__ + '\t' + __TIME__), CHAT_ID)); 
+	while (last_interrupt == 0 && uS < 2400000) {}; status = LINE_OK;
 	log_d("SETUP END");
 }
 extern "C" void app_main() {
@@ -135,9 +135,10 @@ void updateHandler(fb::Update& u) {
 
 static void IRAM_ATTR ISR() {
 	//if (lineRead == LOW) {
-	uint32_t delta = uS - last_interrupt;
+	static uint32_t delta;
+	delta = uS - last_interrupt;
 	last_interrupt = uS;
-	if (delta < 2400000 /*&& delta > 1000*/) {
+	if (delta < 2400000 && delta > 1000) {
 		status = ALARM;
 		alarm_delta = delta;
 	}
@@ -298,7 +299,7 @@ void wifi_server_init() {
 	WiFi.softAP(AP_SSID, AP_PASS, WIFI_CHANNEL, SSID_HIDDEN);
 	//for (uint64_t timer = uS + 1000000; !(WiFi.getStatusBits() & AP_STARTED_BIT);) { if (uS > timer) ESP.restart(); }
 	WiFi.setTxPower(WIFI_POWER_20dBm); DEBUGLN(WiFi.getTxPower()); //WIFI_POWER_20dBm = 80,// 20dBm
-	WiFi.bandwidth(WIFI_BW_HT20);
+	WiFi.softAPbandwidth(WIFI_BW_HT20);
 	DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());
 	// Handle requests for pages that do not exist
 	server.onNotFound([](AsyncWebServerRequest* request) {
@@ -479,5 +480,3 @@ void otaBegin(fb::Update& u, bool fw) {
 exit:
 	dWrite(PIN_LED, LED_OFF);
 }
-
-
