@@ -24,9 +24,7 @@
 #include "chip-debug-report.h"
 
 
-#if ARDUINO_USB_CDC_ON_BOOT && (ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR)
-#define DEBUG_ENABLE
-#elif defined CONFIG_IDF_TARGET_ESP32 && ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR
+#if ARDUINO_USB_CDC_ON_BOOT || (defined CONFIG_IDF_TARGET_ESP32 && ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR)
 #define DEBUG_ENABLE
 #endif
 //#define DEBUG_ENABLE
@@ -63,10 +61,13 @@ void nvs_init() {
 }
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
-esp_ota_img_states_t img_state() {
+esp_ota_img_states_t img_state(bool valid = true) {
 	const esp_partition_t* running = esp_ota_get_running_partition();
 	esp_ota_img_states_t ota_state;
 	esp_ota_get_state_partition(running, &ota_state);
+	if (valid && ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+		esp_ota_mark_app_valid_cancel_rollback();
+	}
 	return ota_state;
 }
 __weak_symbol extern bool verifyRollbackLater();
