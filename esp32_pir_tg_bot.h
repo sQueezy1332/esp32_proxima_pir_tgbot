@@ -25,13 +25,15 @@
 #define DEBUG(x) Serial.print(x)
 #define DEBUGLN(x) Serial.println(x)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
+#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
 #define BOT_TOKEN ""
-#define USER_ID ""
+#define USER_ID "" 
 #define CHAT_ID USER_ID
 #else
 #define DEBUG(x)
 #define DEBUGLN(x) 
 #define DEBUGF(x, ...)
+#define CHECK_(x) (void)(x);
 #define NDEBUG
 #define BOT_TOKEN ""
 #define USER_ID "" 
@@ -138,7 +140,7 @@ void wifi_server_init();
 bool wifi_sta_init(byte wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
 void tg_send(cch* text, cch* chat = CHAT_ID);
-__weak_symbol bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms = 500);
+bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms = 500);
 String create_hex_string(const byte* const& buf, const byte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin = 6);
 bool send_alarm_time(Value const& chat_id);
@@ -147,6 +149,3 @@ void otaBegin(fb::Update& u, bool fw = true);
 void handleDocument(fb::Update& u);
 void handleMessage(fb::Update& u);
 bool verifyRollbackLater() { return true; };
-
-
-
