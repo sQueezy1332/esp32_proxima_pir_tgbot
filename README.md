@@ -3,5 +3,4 @@
 При неудачнной попытке отправки сообщения записывает unix время в файл и пытается отправить каждые 30 сек 
 Зависимости
 https://github.com/GyverLibs/FastBot
-https://github.com/GyverLibs/GyverIO    //необязательна
 https://github.com/me-no-dev/ESPAsyncWebServer
