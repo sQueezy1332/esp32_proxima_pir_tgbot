@@ -1,4 +1,4 @@
-//#include <MAIN.h>
+#include <MAIN.h>
 #include "esp32_pir_tg_bot.h"
 void mainTask(void* pvParameters) {
 	setup();
@@ -54,8 +54,8 @@ void setup() {
 	bot.attachUpdate(updateHandler);
 	bot.setToken(F(BOT_TOKEN));
 	bot.skipUpdates();
-	ESP_ERROR_CHECK(timer_init(TIMER_SABOTAGE, tmrSab, &sabotage_check));
-	ESP_ERROR_CHECK(timer_init(TIMER_CHECK, tmrWifi, &wifi_check));
+	CHECK_(timer_init(TIMER_SABOTAGE, tmrSab, &sabotage_check));
+	CHECK_(timer_init(TIMER_CHECK, tmrWifi, &wifi_check));
 	bot.sendMessage(Message(get_info(), CHAT_ID));
 	(void)send_alarm_time(CHAT_ID);
 #ifdef ESP32C3_LUATOS
