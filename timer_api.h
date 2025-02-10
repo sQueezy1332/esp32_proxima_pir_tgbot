@@ -4,8 +4,8 @@
 #define timer_stop(x) gptimer_stop((x))
 #define timer_restart(x) gptimer_set_raw_count((x), 0)
 
-//__attribute__((weak)) extern gptimer_handle_t timer0, timer1;
-//__attribute__((weak)) extern auto interrupt_flag;
+//bool timer0_cb(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
+//bool timer1_cb(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 #ifdef  __cplusplus
 extern "C" {
 #endif //  __cplusplus
@@ -18,7 +18,7 @@ extern "C" {
 		return gptimer_set_alarm_action(handle, &alarm_cfg);
 		//interrupt_flag = flag;
 	}
-	esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func, const bool start = 1, const byte prio = 1, const bool reload = 1) {
+	esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func, const bool start = 1, const bool reload = 1, const byte prio = 1) {
 		free(handle); //log_d("timer_start = %u\n", start);
 		gptimer_config_t config {
 			.clk_src = GPTIMER_CLK_SRC_DEFAULT,
