@@ -196,12 +196,13 @@ bool deleteFile(cch* path) {
 }
 
 String get_info() {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(180);
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(190);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL); 
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60;
-	str += "m "; str += sec % 60; str += 's'; str += "\ninterrupt_delta =  "; str += interrupt_delta; log_d("%u", str.length());
+	str += "m "; str += sec % 60; str += 's'; str += "\ninterrupt_delta =  "; str += interrupt_delta; 
+	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
 	return str;
 }
 /*		WIFI	*/
@@ -318,10 +319,10 @@ void tg_send(tgMessage_t& tmp) {
 	} else {
 		switch (tmp.status) {
 		//case ok: msg.text = "OK"; break;
-		case ALARM: msg.text = "ALARM"; break;
+		//case ALARM: msg.text = "ALARM"; break;
 		case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 		case LINE_LOW:  msg.text = "LINE_LOW"; break; 
-		default: msg.text = tmp.status;
+		default: msg.text = "ALARM"; //msg.text = (uint8_t)tmp.status; log_d("default");
 		} DEBUGLN(msg.text);
 		//if (tmp.status != ok) 
 		{ msg.text += '\t'; msg.text += (tmp.delta / 1000); }
@@ -399,9 +400,8 @@ void handleDocument(fb::Update& u) {
 
 void otaBegin(fb::Update& u, bool fw) {
 	dWrite(PIN_LED, LED_ON);
-	auto chat = u.message().chat().id();
-	if (fw) bot.updateFlash(u.message().document(), chat);
-	else bot.updateFS(u.message().document(), chat);
+	if (fw) bot.updateFlash(u.message().document(), u.message().chat().id());
+	else bot.updateFS(u.message().document(), u.message().chat().id());
 	dWrite(PIN_LED, LED_OFF);
 }
 
