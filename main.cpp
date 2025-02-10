@@ -231,7 +231,7 @@ bool wifi_sta_init(byte wait_sec) {
 
 void wifi_server_init() {
 #if	WIFI_CHANNEL > 11
-	ERR_CHECK(esp_wifi_set_country_code("CN", false));
+	CHECK_(esp_wifi_set_country_code("CN", false));
 #endif
 	WiFi.softAP(AP_SSID, AP_PASS, WIFI_CHANNEL, SSID_HIDDEN);
 	//for (uint64_t timer = uS + 1000000; !(WiFi.getStatusBits() & AP_STARTED_BIT);) { if (uS > timer) ESP.restart(); }
