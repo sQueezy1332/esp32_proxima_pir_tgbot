@@ -329,19 +329,19 @@ void handleMessage(fb::Update& u) {
 		msg.text = "ESP will stay connected";
 		bot.sendMessage(msg); Flag = CHECK_MSG; break;
 	case SH("/disconnect"):
-		msg.text = ("Disconnecting...");
+		msg.text = "Disconnecting..."; bot.sendMessage(msg);
 		Flag = WIFI_DISCONNECT; break;
 	case SH("/alarm_on"):
-		msg.text = "Alarm on";
+		msg.text = "Alarm on"; bot.sendMessage(msg);
 		alarm_on(); break;
 	case SH("/alarm_off"):
-		msg.text = "Alarm off";
+		msg.text = "Alarm off"; bot.sendMessage(msg);
 		alarm_off(); break;
 	case SH("/get_info"):
-		msg.text = std::move(get_info());
+		msg.text = std::move(get_info()); bot.sendMessage(msg);
 		bot.sendMessage(msg); break;
 	case SH("/restart"):
-		msg.text = ("ESP restarting...");
+		msg.text = "ESP restarting..."; bot.sendMessage(msg);
 		bot.reboot(); Flag = RESTART; break;
 	case SH("/send_alarm"):
 		send_alarm_time(msg.chatID); break;
