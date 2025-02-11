@@ -80,15 +80,14 @@ void setup(void*) {
 	wifi_sta_init();
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
-	log_d("compiled %s\t%s", __DATE__ + , + __TIME__);
 #endif 
 	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org"); time_sync();
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates(); bot.sendMessage(Message(get_info(), CHAT_ID));
 	Flag = send_alarm_time(CHAT_ID);
-	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY)  
-		bot.sendMessage(Message(((String)"ESP_OTA_IMG_PENDING_VERIFY\n" + __DATE__ + '\t' + __TIME__), CHAT_ID));
+	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(("ESP_OTA_IMG_PENDING_VERIFY"), CHAT_ID));
+	String ver("Compiled: "); ver += __DATE__; ver += '\t'; ver += __TIME__; bot.sendMessage(Message(ver, CHAT_ID)); log_d("%s", ver.c_str());
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
 	alarm_on(); dWrite(PIN_LED, LED_OFF); log_i("SETUP END");
@@ -441,14 +440,14 @@ void read_credentials() {
 }
 
 String get_info() {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(200);
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(256);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
-	str += "\last_interrupt =  "; str += last_interrupt;
+	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
-	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
+	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
 	return str;
 }
 
