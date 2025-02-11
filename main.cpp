@@ -2,7 +2,7 @@
 
 extern "C" void app_main() {
 	main_init();
-	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
+	QueueHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
 	xTaskCreate(setup, "setup", 8192, NULL, 5, NULL);
 }
 
@@ -11,7 +11,7 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG:
 			if (xTaskGetTickCount() - tick > pdMS_TO_TICKS(30 * 60 * 1000)) {
-				Flag = send_alarm_time(CHAT_ID); tick = xTaskGetTickCount();
+				Flag = send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_i("%u", Flag);
 			}
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot.tick(); }
@@ -19,7 +19,7 @@ void mainTask(void*) {
 		case WIFI_DISCONNECT:
 			time_sync(); WiFi.disconnect(); Flag = WIFI_RECON;
 			break;
-		case WIFI_INIT: 
+		case WIFI_INIT:
 			Flag = CHECK_MSG;
 		case WIFI_RECON:
 			if (wifi_sta_init()) {
@@ -36,7 +36,7 @@ void mainTask(void*) {
 
 void sendTask(void*) {
 	for (tgMessage_t tmp;;) {
-		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
+		while (xQueueReceive(QueueHandle, &tmp, portMAX_DELAY) == pdPASS) {
 			tg_send(tmp);
 		}
 	}
@@ -44,24 +44,23 @@ void sendTask(void*) {
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
 	uint64_t time = uS; uint32_t delta = time - last_interrupt;
-	last_interrupt = time; interrupt_delta = delta; tgMessage_t tmp;
-	timer_restart(tmr_sab);
+	last_interrupt = time; interrupt_delta = delta; tgMessage_t tmp; //sizeof(tgMessage_t)
+	timer_restart(tmr_sab); 
 	if (alarm_state && (delta < 2400000) && (delta > 1000)) {
-		tmp = { .delta = delta, .status = ALARM, };
+		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
 		//prev_alarm = ALARM;
 	} /*else if (prev_alarm != ok) {
 		tmp = { .delta = delta, .status = ok, }; prev_alarm = ok;
 	} */else return;
-	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
+	xQueueSendFromISR(QueueHandle, &tmp, nullptr);
 }
 
 bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	tgMessage_t tmp {
-		.delta = uS - last_interrupt,
-		.status = lineRead ? LINE_HIGH : LINE_LOW
-	};
-	//prev_alarm = tmp.status;
-	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);	
+	tgMessage_t tmp{
+		.status = lineRead ? LINE_HIGH : LINE_LOW,
+		.delta = (uint16_t)((uS - last_interrupt) / 1000),
+	}; //prev_alarm = tmp.status;
+	xQueueSendFromISR(QueueHandle, &tmp, nullptr);
 	return false;
 }
 /*		INIT	*/
@@ -81,17 +80,15 @@ void setup(void*) {
 	wifi_sta_init();
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
+	log_d("compiled %s\t%s", __DATE__ + , + __TIME__);
 #endif 
-	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org");
-	time_sync();
+	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org"); time_sync();
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
-	bot.setToken(F(BOT_TOKEN));
-	bot.attachUpdate(updateHandler);
-	//bot.setPollMode(Poll::Long, 20000);
-	bot.skipUpdates();
-	bot.sendMessage(Message(get_info(), CHAT_ID));
+	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
+	bot.skipUpdates(); bot.sendMessage(Message(get_info(), CHAT_ID));
 	Flag = send_alarm_time(CHAT_ID);
-	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(((String)"ESP_OTA_IMG_PENDING_VERIFY\n" + __DATE__ + '\t' + __TIME__), CHAT_ID));
+	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY)  
+		bot.sendMessage(Message(((String)"ESP_OTA_IMG_PENDING_VERIFY\n" + __DATE__ + '\t' + __TIME__), CHAT_ID));
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
 	alarm_on(); dWrite(PIN_LED, LED_OFF); log_i("SETUP END");
@@ -119,9 +116,9 @@ stat_t send_alarm_time(Value const& chat_id) {
 		DEBUGLN(" failed to open file for reading");
 		return ok;
 	}
-	struct tm timeinfo; _time_t timestamp = 0; Message msg("", chat_id); char* tmp = &msg.text[0];
-	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t)
-	, str_size = 11/*18*/ * count, heap = ESP.getFreeHeap(); log_d("file_size %u, count %u, str_size %u, HEAP %u", file_size, count, str_size, heap);
+	Message msg("", chat_id); _time_t timestamp = 0; // char* tmp = &msg.text[0]; struct tm timeinfo;
+	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_size = 11/*18*/ * count, heap = ESP.getFreeHeap(); 
+	log_d("file_size %u, count %u, str_size %u, HEAP %u", file_size, count, str_size, heap);
 	if (heap - 5000 < str_size || !msg.text.reserve(str_size + 1)) { DEBUGLN("Not enough heap"); return ok; }
 	/*for (size_t offset = 0; offset < str_size, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
@@ -134,14 +131,13 @@ stat_t send_alarm_time(Value const& chat_id) {
 		file.read((byte*)&timestamp, sizeof(_time_t)); DEBUGLN(timestamp);
 		msg.text += timestamp;
 		msg.text += '\n';
-	}  msg.text[str_size - 1] = '\0';
-	log_d("%s", msg.text.c_str()); 
+	}  msg.text[str_size - 1] = '\0'; DEBUGLN(msg.text);
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		return RESEND_MSG;
 	} else if (!bot.sendMessage(msg)) return RESEND_MSG;
 	if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
-	return CHECK_MSG;
+	return CHECK_MSG; //delayMicroseconds(); 
 }
 
 bool readFile(cch* path, String& Content) {
@@ -198,10 +194,10 @@ bool deleteFile(cch* path) {
 String get_info() {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(190);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL); 
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60;
-	str += "m "; str += sec % 60; str += 's'; str += "\ninterrupt_delta =  "; str += interrupt_delta; 
+	str += "m "; str += sec % 60; str += 's'; str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
 	return str;
 }
@@ -321,17 +317,17 @@ void tg_send(tgMessage_t& tmp) {
 		//case ok: msg.text = "OK"; break;
 		//case ALARM: msg.text = "ALARM"; break;
 		case LINE_HIGH: msg.text = "LINE_HIGH"; break;
-		case LINE_LOW:  msg.text = "LINE_LOW"; break; 
+		case LINE_LOW:  msg.text = "LINE_LOW"; break;
 		default: msg.text = "ALARM"; //msg.text = (uint8_t)tmp.status; log_d("default");
 		} DEBUGLN(msg.text);
 		//if (tmp.status != ok) 
-		{ msg.text += '\t'; msg.text += (tmp.delta / 1000); }
+		{ msg.text += '\t'; msg.text += (tmp.delta); }
 		DEBUGLN(xTaskGetTickCount()); //while (bot.isPolling()){ delay(100); }
 		if (!bot.sendMessage(msg)) {
 save:
 		//	if (tmp.status != ok)
 			{	appendFile(ALARM_PATH, timestamp_unix + ((uS - timestamp_sync) / 1000000));
-				Flag = RESEND_MSG;
+			Flag = RESEND_MSG;
 			}
 		}
 	}DEBUGLN(xTaskGetTickCount());
@@ -356,9 +352,8 @@ void handleMessage(fb::Update& u) {
 	case SH("/get_info"):
 		bot.sendMessage(Message(get_info(), chat)); break;
 	case SH("/restart"):
-		bot.sendMessage(Message("ESP restarting...", chat)); 
+		bot.sendMessage(Message("ESP restarting...", chat));
 		bot.reboot(); Flag = RESTART; break;
-
 	case SH("/send_alarm"):
 		if (!send_alarm_time(chat)) bot.sendMessage(Message("No file", chat)); break;
 	case SH("/clear_alarm"):
@@ -387,7 +382,6 @@ void handleMessage(fb::Update& u) {
 		} else bot.sendMessage(Message("Unknown", chat)); }
 #endif
 	}
-
 }
 
 void handleDocument(fb::Update& u) {
