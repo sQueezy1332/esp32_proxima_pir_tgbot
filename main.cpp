@@ -413,28 +413,6 @@ void updateHandler(fb::Update& u) {
 #ifndef NO_BLE
 bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms) {
 	if (ble_data == nullptr || ble_data_length == 0) return false; DEBUGLN(ESP.getFreeHeap());
-	esp_ble_gap_ext_adv_params_t ext_adv_params_coded = {
-	.type = ESP_BLE_GAP_SET_EXT_ADV_PROP_NONCONN_NONSCANNABLE_UNDIRECTED,
-	.interval_min = 0x30,
-	.interval_max = 0x30,
-	.channel_map = ADV_CHNL_ALL,
-	.own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-	.filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-	.tx_power = 126,
-	.primary_phy = ESP_BLE_GAP_PHY_CODED,
-	.max_skip = 0,
-	.secondary_phy = ESP_BLE_GAP_PHY_CODED,
-	.sid = 1,
-	.scan_req_notif = false,
-	};
-	if (!BLEDevice::getInitialized()) BLEDevice::init("");
-	BLEMultiAdvertising advert;
-	esp_ble_gap_set_preferred_default_phy(ESP_BLE_GAP_PHY_OPTIONS_PREF_S8_CODING, ESP_BLE_GAP_PHY_OPTIONS_PREF_S8_CODING);
-	advert.setAdvertisingParams(0, &ext_adv_params_coded);
-	advert.setDuration(0);
-	advert.setAdvertisingData(0, ble_data_length, ble_data);
-	advert.start(); delay(time_ms); advert.stop(0, (uint8_t*)0); advert.clear();
-	BLEDevice::deinit(); DEBUGLN(ESP.getFreeHeap());
 	return true;
 }
 #endif
