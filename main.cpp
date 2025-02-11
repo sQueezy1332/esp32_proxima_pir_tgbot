@@ -2,7 +2,7 @@
 
 extern "C" void app_main() {
 	main_init();
-	QueueHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
+	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
 	xTaskCreate(setup, "setup", 8192, NULL, 5, NULL);
 }
 
@@ -36,7 +36,7 @@ void mainTask(void*) {
 
 void sendTask(void*) {
 	for (tgMessage_t tmp;;) {
-		while (xQueueReceive(QueueHandle, &tmp, portMAX_DELAY) == pdPASS) {
+		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
 			tg_send(tmp);
 		}
 	}
@@ -52,7 +52,7 @@ static void IRAM_ATTR ISR() {
 	} /*else if (prev_alarm != ok) {
 		tmp = { .status = ok, .delta = delta }; prev_alarm = ok;
 	} */else return;
-	xQueueSendFromISR(QueueHandle, &tmp, nullptr);
+	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
 }
 
 bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
@@ -60,7 +60,7 @@ bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_da
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
 		.delta = (uint16_t)((uS - last_interrupt) / 1000),
 	}; //prev_alarm = tmp.status;
-	xQueueSendFromISR(QueueHandle, &tmp, nullptr);
+	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
 	return false;
 }
 /*		INIT	*/
