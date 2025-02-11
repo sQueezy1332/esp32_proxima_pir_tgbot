@@ -85,9 +85,10 @@ void setup(void*) {
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates(); bot.sendMessage(Message(get_info(), CHAT_ID));
+	String ver("Compiled: "); ver += __DATE__; ver += '\t'; ver += __TIME__;
+	bot.sendMessage(Message(ver, CHAT_ID)); log_d("%s", ver.c_str());
 	Flag = send_alarm_time(CHAT_ID);
 	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(("ESP_OTA_IMG_PENDING_VERIFY"), CHAT_ID));
-	String ver("Compiled: "); ver += __DATE__; ver += '\t'; ver += __TIME__; bot.sendMessage(Message(ver, CHAT_ID)); log_d("%s", ver.c_str());
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
 	alarm_on(); dWrite(PIN_LED, LED_OFF); log_i("SETUP END");
