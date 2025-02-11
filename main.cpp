@@ -11,7 +11,7 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG:
 			if (xTaskGetTickCount() - tick > pdMS_TO_TICKS(30 * 60 * 1000)) {
-				send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_d("%u", Flag);
+				send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_i("%u", Flag);
 			}
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot.tick(); }
@@ -37,7 +37,7 @@ void mainTask(void*) {
 void sendTask(void*) {
 	for (tgMessage_t tmp;;) {
 		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
-			tg_send(tmp);
+			tg_send(tmp); delay(900);
 		}
 	}
 }
@@ -85,7 +85,8 @@ void setup(void*) {
 	time_sync();
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
-	bot.skipUpdates(); bot.sendMessage(Message(get_info(true), CHAT_ID));
+	bot.skipUpdates(); 
+	Message msg("", CHAT_ID); msg.text = std::move(get_info(true)); bot.sendMessage(msg);
 	send_alarm_time(CHAT_ID, false);
 	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(("ESP_OTA_IMG_PENDING_VERIFY"), CHAT_ID));
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
@@ -95,7 +96,7 @@ void setup(void*) {
 }
 
 void time_sync(byte wait_sec) {
-	DEBUG("Time sync -");
+	DEBUG("Time sync ");
 	for (TickType_t ticker = 0;; --wait_sec) {
 		time((time_t*)&timestamp_unix);
 		if (timestamp_unix > 1000000000) break;
@@ -109,7 +110,7 @@ void time_sync(byte wait_sec) {
 }
 /*		FILE SYSTEM	*/
 void send_alarm_time(Value const& chat_id, bool no_file) {
-	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); Message msg("", chat_id);
+	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); Message msg; msg.chatID = chat_id;
 	fs::File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
@@ -117,21 +118,18 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap(); 
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
-	{	String str("", str_len);
+	{String str("", str_len);
 	if (heap - 5000 < str_len || !str.length()) {
 		log_i("Not enough heap"); msg.text = "Not enough heap"; bot.sendMessage(msg); return;
-	} time_t timestamp = 0; struct tm timeinfo; auto с = &str[0];
+	} time_t timestamp = 0; struct tm timeinfo; char* с = &str[0];
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
-		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp);
+		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
 		strftime(&с[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
 		offset += 18;
 		с[offset - 1] = '\n';
-	} msg.text = str; DEBUGLN(msg.text.length()); DEBUGLN(msg.text);
-	}
-		/*msg.text += timestamp;
-		msg.text += '\n';
-	}  msg.text[str_size - 1] = '\0';*/ 
+	}	с[str_len] = '\0';
+	msg.text = std::move(str); DEBUGLN(msg.text); }
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
@@ -297,7 +295,7 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 /*		TELEGRAM	*/
 void tg_send(tgMessage_t& tmp) {
 	dWrite(PIN_LED, LED_ON);
-	Message msg("", CHAT_ID);
+	static Message msg("", CHAT_ID);
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		goto save;
@@ -325,31 +323,34 @@ save:
 }
 
 void handleMessage(fb::Update& u) {
-	auto chat = u.message().chat().id(); DEBUGLN(u.message().text());
+	Message msg; msg.chatID = u.message().chat().id(); DEBUGLN(u.message().text());
 	switch (u.message().text().hash()) {
 	case SH("/connect"):
-		bot.sendMessage(Message("ESP will stay connected", chat));
-		Flag = CHECK_MSG; break;
+		msg.text = "ESP will stay connected";
+		bot.sendMessage(msg); Flag = CHECK_MSG; break;
 	case SH("/disconnect"):
-		bot.sendMessage(Message("Disconnecting...", chat));
+		msg.text = ("Disconnecting...");
 		Flag = WIFI_DISCONNECT; break;
 	case SH("/alarm_on"):
-		bot.sendMessage(Message("Alarm on", chat));
+		msg.text = "Alarm on";
 		alarm_on(); break;
 	case SH("/alarm_off"):
-		bot.sendMessage(Message("Alarm off", chat));
+		msg.text = "Alarm off";
 		alarm_off(); break;
 	case SH("/get_info"):
-		bot.sendMessage(Message(get_info(), chat)); break;
+		msg.text = std::move(get_info());
+		bot.sendMessage(msg); break;
 	case SH("/restart"):
-		bot.sendMessage(Message("ESP restarting...", chat));
+		msg.text = ("ESP restarting...");
 		bot.reboot(); Flag = RESTART; break;
 	case SH("/send_alarm"):
-		send_alarm_time(chat);break;
+		send_alarm_time(msg.chatID);break;
 	case SH("/clear_alarm"):
-		bot.sendMessage(Message(deleteFile(ALARM_PATH) ? "Done" : "No file", chat)); break;
-	case SH("/valid"):  esp_ota_mark_app_valid_cancel_rollback();
-		bot.sendMessage(Message(String(img_state()), chat)); break;
+		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file"; 
+		bot.sendMessage(msg); break;
+	case SH("/valid"):  
+		esp_ota_mark_app_valid_cancel_rollback();
+		msg.text += (int)img_state(); bot.sendMessage(msg);  break;
 #if defined RELAY
 	case SH(RELAY_ON):
 		dWrite(PIN_RELAY, HIGH);
@@ -359,17 +360,19 @@ void handleMessage(fb::Update& u) {
 		bot.sendMessage(Message("RELAY OFF", chat)); break;
 #endif
 #ifndef NO_BLE
-	case SH("/ble"): bot.sendMessage(Message(ble_advertising(ble_data, ble_data_size) ?
-		"BLE data sended" : "BLE data empty", chat)); break;
+	case SH("/ble"): bot.sendMessage(Message(
+		msg.text = ble_advertising(ble_data, ble_data_size) ? "BLE data sended" : "BLE data empty"; 
+		bot.sendMessage(msg); break;
 	case SH("/ble_clear"): free(ble_data); ble_data = nullptr; ble_data_size = 0;
-		bot.sendMessage(Message("Done", chat)); break;
-
+		msg.text = "Done"; bot.sendMessage(msg); break;
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
-				bot.sendMessage(Message(create_hex_string(ble_data, ble_data_size), chat));
-			} else bot.sendMessage(Message("Wrong format", chat));
-		} else bot.sendMessage(Message("Unknown", chat)); }
+				msg.text = std::move(create_hex_string(ble_data, ble_data_size));
+			} else msg.text = "Wrong format";
+			bot.sendMessage(msg);
+		} else { msg.text = "Unknown"; bot.sendMessage(msg); }
+	}
 #endif
 	}
 }
@@ -474,7 +477,7 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte 
 	if (hex_len < hexSizeMin || hex_len > 255) return false;
 	cch* ptr = str.c_str() + sub;
 	free(buf);
-	buf = (byte*)calloc(hex_len, sizeof(byte));
+	buf = (byte*)malloc(hex_len);
 	byte i = 0;
 	for (byte ready = 0, result = 0; *ptr/* && i < hex_len*/; ++ptr) {
 		switch (*ptr) {
