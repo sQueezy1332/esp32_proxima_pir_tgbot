@@ -3,7 +3,7 @@
 extern "C" void app_main() {
 	main_init();
 	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
-	xTaskCreate(setup, "setup", 8192, NULL, 5, NULL);
+	xTaskCreate(setup, "setup", 8192, NULL, 6, NULL);
 }
 
 void mainTask(void*) {
