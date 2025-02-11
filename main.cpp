@@ -338,7 +338,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = "Alarm off"; bot.sendMessage(msg);
 		alarm_off(); break;
 	case SH("/get_info"):
-		msg.text = std::move(get_info()); bot.sendMessage(msg);
+		msg.text = std::move(get_info());
 		bot.sendMessage(msg); break;
 	case SH("/restart"):
 		msg.text = "ESP restarting..."; bot.sendMessage(msg);
