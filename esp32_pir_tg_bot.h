@@ -119,7 +119,7 @@ typedef struct /*__attribute__((packed))*/ {
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
 TaskHandle_t mainTaskHandle,sendTaskHandle;
-QueueHandle_t QueueHandle;
+QueueHandle_t QueueStatHandle;
 StaticQueue_t pxStaticQueue;
 uint8_t QueueStatStorage[QUEUE_SIZE];
 
