@@ -198,8 +198,7 @@ String get_info() {
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle); 
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\last_interrupt =  "; str += last_interrupt;
-	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60;
-	str += "m "; str += sec % 60; str += 's';
+	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
 	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
 	return str;
 }
