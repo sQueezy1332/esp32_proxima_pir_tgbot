@@ -383,8 +383,12 @@ void handleDocument(fb::Update& u) {
 
 void otaBegin(fb::Update& u, bool fw) {
 	dWrite(PIN_LED, LED_ON);
-	if (fw) bot.updateFlash(u.message().document(), u.message().chat().id());
-	else bot.updateFS(u.message().document(), u.message().chat().id());
+	Fetcher fetch = bot.downloadFile(u.message().document().id());  bool ret;
+	if(!fetch) bot.sendMessage(Message(F("Download error"), u.message().chat().id()));
+	if (fw) ret = fetch.updateFlash();
+	else ret = fetch.updateFS();
+	bot.sendMessage(Message(ret ? F("OTA OK") : F("OTA Error"), u.message().chat().id()));
+	Flag = RESTART;
 	dWrite(PIN_LED, LED_OFF);
 }
 
