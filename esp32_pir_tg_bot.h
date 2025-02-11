@@ -111,15 +111,15 @@ typedef enum : uint8_t {
 	RESTART
 } stat_t;
 
-typedef struct __attribute__((packed)) {
-	uint32_t delta;
+typedef struct /*__attribute__((packed))*/ {
 	stat_t status;
+	uint16_t delta;
 } tgMessage_t;
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
 TaskHandle_t mainTaskHandle,sendTaskHandle;
-QueueHandle_t QueueStatHandle;
+QueueHandle_t QueueHandle;
 StaticQueue_t pxStaticQueue;
 uint8_t QueueStatStorage[QUEUE_SIZE];
 
