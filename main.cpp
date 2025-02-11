@@ -11,7 +11,7 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG:
 			if (xTaskGetTickCount() - tick > pdMS_TO_TICKS(30 * 60 * 1000)) {
-				Flag = send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_i("%u", Flag);
+				send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_d("%u", Flag);
 			}
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot.tick(); }
@@ -81,13 +81,12 @@ void setup(void*) {
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
 #endif 
-	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org"); time_sync();
+	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org"); 
+	time_sync();
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
-	bot.skipUpdates(); bot.sendMessage(Message(get_info(), CHAT_ID));
-	String ver("Compiled: "); ver += __DATE__; ver += '\t'; ver += __TIME__;
-	bot.sendMessage(Message(ver, CHAT_ID)); log_d("%s", ver.c_str());
-	Flag = send_alarm_time(CHAT_ID);
+	bot.skipUpdates(); bot.sendMessage(Message(get_info(true), CHAT_ID));
+	send_alarm_time(CHAT_ID, false);
 	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(("ESP_OTA_IMG_PENDING_VERIFY"), CHAT_ID));
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
@@ -312,7 +311,7 @@ void tg_send(tgMessage_t& tmp) {
 		} DEBUGLN(msg.text);
 		//if (tmp.status != ok) 
 		{ msg.text += '\t'; msg.text += (tmp.delta); }
-		DEBUGLN(xTaskGetTickCount()); //while (bot.isPolling()){ delay(100); }
+		DEBUGLN(xTaskGetTickCount()); //while (bot.isPolling()) { delay(100); }
 		if (!bot.sendMessage(msg)) {
 save:
 		//	if (tmp.status != ok)
@@ -320,6 +319,7 @@ save:
 			Flag = RESEND_MSG;
 			}
 		}
+		if (Flag != RESEND_MSG) Flag = CHECK_MSG;
 	}DEBUGLN(xTaskGetTickCount());
 	dWrite(PIN_LED, LED_OFF);
 }
@@ -332,7 +332,7 @@ void handleMessage(fb::Update& u) {
 		Flag = CHECK_MSG; break;
 	case SH("/disconnect"):
 		bot.sendMessage(Message("Disconnecting...", chat));
-		Flag = (WIFI_DISCONNECT); break;
+		Flag = WIFI_DISCONNECT; break;
 	case SH("/alarm_on"):
 		bot.sendMessage(Message("Alarm on", chat));
 		alarm_on(); break;
@@ -345,7 +345,7 @@ void handleMessage(fb::Update& u) {
 		bot.sendMessage(Message("ESP restarting...", chat));
 		bot.reboot(); Flag = RESTART; break;
 	case SH("/send_alarm"):
-		if (!send_alarm_time(chat)) bot.sendMessage(Message("No file", chat)); break;
+		send_alarm_time(chat);break;
 	case SH("/clear_alarm"):
 		bot.sendMessage(Message(deleteFile(ALARM_PATH) ? "Done" : "No file", chat)); break;
 	case SH("/valid"):  esp_ota_mark_app_valid_cancel_rollback();
@@ -376,31 +376,32 @@ void handleMessage(fb::Update& u) {
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
-	case SH("/update_fw"): otaBegin(u, true); break;
-	case SH("/update_fs"): otaBegin(u, false); break;
+	case SH("/firmware"): otaBegin(u, true); break;
+	case SH("/filesystem"): otaBegin(u, false); break;
 	default: bot.sendMessage(Message("Unknown", u.message().chat().id()));
 	}
 }
 
 void otaBegin(fb::Update& u, bool fw) {
 	dWrite(PIN_LED, LED_ON);
-	Fetcher fetch = bot.downloadFile(u.message().document().id());  bool ret;
-	if(!fetch) bot.sendMessage(Message(F("Download error"), u.message().chat().id()));
+	vTaskSuspend(sendTaskHandle);
+	auto chat = u.message().chat().id(); bool ret;
+	bot.sendMessage(Message("OTA begin", chat));
+	Fetcher fetch = bot.downloadFile(u.message().document().id());  
+	if (!fetch) bot.sendMessage(Message("Download error", chat));
 	if (fw) ret = fetch.updateFlash();
 	else ret = fetch.updateFS();
-	bot.sendMessage(Message(ret ? F("OTA OK") : F("OTA Error"), u.message().chat().id()));
-	Flag = RESTART;
-	dWrite(PIN_LED, LED_OFF);
+	if (ret) { bot.sendMessage(Message("Success", chat)); Flag = RESTART; }
+	else { bot.sendMessage(Message("Error", chat)); }
+	DEBUGLN(uxTaskGetStackHighWaterMark2(NULL));
+	vTaskResume(sendTaskHandle);
+	dWrite(PIN_LED, LED_OFF); dWrite(PIN_LED, LED_OFF);
 }
 
 void updateHandler(fb::Update& u) {
 	if (u.isMessage() && u.message().from().id() == USER_ID) {
-		switch (Flag) {
-		case RESEND_MSG: Flag = send_alarm_time(CHAT_ID);
-		case CHECK_MSG: break;
-		default:Flag = CHECK_MSG;
-		}
-		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin"))
+		if (Flag != RESEND_MSG) Flag = CHECK_MSG;
+		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin")) 
 			handleDocument(u);
 		else handleMessage(u);
 	}
@@ -445,7 +446,7 @@ void read_credentials() {
 	} DEBUGLN(ssid); DEBUGLN(pass);
 }
 
-String get_info() {
+String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(256);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
@@ -453,7 +454,8 @@ String get_info() {
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
-	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
+	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); 
+	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; }log_d("%u", str.length());
 	return str;
 }
 
