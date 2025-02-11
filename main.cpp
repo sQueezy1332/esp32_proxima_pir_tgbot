@@ -190,18 +190,6 @@ bool deleteFile(cch* path) {
 		return true;
 	} else DEBUGLN(" delete failed"); return false;
 }
-
-String get_info() {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(200);
-	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
-	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle); 
-	str += "\ninterrupt_delta =  "; str += interrupt_delta;
-	str += "\last_interrupt =  "; str += last_interrupt;
-	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
-	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
-	return str;
-}
 /*		WIFI	*/
 void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
@@ -450,6 +438,18 @@ void read_credentials() {
 		ssid = DEFAULT_SSID;
 		pass = DEFAULT_PASS;
 	} DEBUGLN(ssid); DEBUGLN(pass);
+}
+
+String get_info() {
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(200);
+	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
+	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
+	str += "\ninterrupt_delta =  "; str += interrupt_delta;
+	str += "\last_interrupt =  "; str += last_interrupt;
+	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
+	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
+	return str;
 }
 
 String create_hex_string(const byte* const& buf, const byte data_size) {
