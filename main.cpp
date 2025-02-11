@@ -50,7 +50,7 @@ static void IRAM_ATTR ISR() {
 		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
 		//prev_alarm = ALARM;
 	} /*else if (prev_alarm != ok) {
-		tmp = { .delta = delta, .status = ok, }; prev_alarm = ok;
+		tmp = { .status = ok, .delta = delta }; prev_alarm = ok;
 	} */else return;
 	xQueueSendFromISR(QueueHandle, &tmp, nullptr);
 }
