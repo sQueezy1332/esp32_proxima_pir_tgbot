@@ -192,12 +192,14 @@ bool deleteFile(cch* path) {
 }
 
 String get_info() {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(190);
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(200);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
-	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
+	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle); 
+	str += "\ninterrupt_delta =  "; str += interrupt_delta;
+	str += "\last_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60;
-	str += "m "; str += sec % 60; str += 's'; str += "\ninterrupt_delta =  "; str += interrupt_delta;
+	str += "m "; str += sec % 60; str += 's';
 	str += "\tUnix time "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000)); log_d("%u", str.length());
 	return str;
 }
