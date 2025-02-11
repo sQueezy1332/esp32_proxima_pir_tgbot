@@ -109,35 +109,36 @@ void time_sync(byte wait_sec) {
 	timestamp_sync = uS; DEBUGLN(timestamp_unix);
 }
 /*		FILE SYSTEM	*/
-stat_t send_alarm_time(Value const& chat_id) {
-	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH);
+void send_alarm_time(Value const& chat_id, bool no_file) {
+	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); Message msg("", chat_id);
 	fs::File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
-		return ok;
+		if (no_file) { msg.text = "No file"; bot.sendMessage(msg);} return;
 	}
-	Message msg("", chat_id); _time_t timestamp = 0; // char* tmp = &msg.text[0]; struct tm timeinfo;
-	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_size = 11/*18*/ * count, heap = ESP.getFreeHeap(); 
-	log_d("file_size %u, count %u, str_size %u, HEAP %u", file_size, count, str_size, heap);
-	if (heap - 5000 < str_size || !msg.text.reserve(str_size + 1)) { DEBUGLN("Not enough heap"); return ok; }
-	/*for (size_t offset = 0; offset < str_size, file.available();) {
+	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap(); 
+	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
+	{	String str("", str_len);
+	if (heap - 5000 < str_len || !str.length()) {
+		log_i("Not enough heap"); msg.text = "Not enough heap"; bot.sendMessage(msg); return;
+	} time_t timestamp = 0; struct tm timeinfo; auto с = &str[0];
+	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
-		localtime_r((time_t*)&timestamp, &timeinfo); DEBUGLN(timestamp);
-		strftime(&tmp[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
+		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp);
+		strftime(&с[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
 		offset += 18;
-		msg.text[offset - 1] = '\n';
-	}  msg.text[str_size - 1] = '\0';*/ /////TODO
-	for (size_t i = 0; i < count, file.available(); i++) {
-		file.read((byte*)&timestamp, sizeof(_time_t)); DEBUGLN(timestamp);
-		msg.text += timestamp;
+		с[offset - 1] = '\n';
+	} msg.text = str; DEBUGLN(msg.text.length()); DEBUGLN(msg.text);
+	}
+		/*msg.text += timestamp;
 		msg.text += '\n';
-	}  msg.text[str_size - 1] = '\0'; DEBUGLN(msg.text);
+	}  msg.text[str_size - 1] = '\0';*/ 
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
-		return RESEND_MSG;
-	} else if (!bot.sendMessage(msg)) return RESEND_MSG;
+		Flag = RESEND_MSG; return;
+	} else if (!bot.sendMessage(msg)) Flag = RESEND_MSG; return;
 	if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
-	return CHECK_MSG; //delayMicroseconds(); 
+	Flag = CHECK_MSG;
 }
 
 bool readFile(cch* path, String& Content) {
