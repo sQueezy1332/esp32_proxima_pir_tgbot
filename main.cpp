@@ -133,8 +133,8 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
-	} else if (!bot.sendMessage(msg)) Flag = RESEND_MSG; return;
-	if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
+	} else if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
+	if (!bot.sendMessage(msg)) { Flag = RESEND_MSG; return; }
 	Flag = CHECK_MSG;
 }
 
