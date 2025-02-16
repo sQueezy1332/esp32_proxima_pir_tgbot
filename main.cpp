@@ -133,7 +133,7 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
-	} else if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
+	}
 	if (!bot.sendMessage(msg)) { Flag = RESEND_MSG; return; }
 	Flag = CHECK_MSG;
 }
@@ -191,9 +191,8 @@ bool deleteFile(cch* path) {
 /*		WIFI	*/
 void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
-		resumeTask(RESEND_MSG);
-		yield();
-	}
+		WiFi.removeEvent(event_id); event_id = 0;
+		resumeTask();
 }
 
 bool wifi_sta_init(byte wait_sec) {
