@@ -167,5 +167,5 @@ String create_hex_string(const byte* const& buf, const byte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin = 6);
 void alarm_on() { alarm_state = true;/*enableInterrupt(PIN_LINE);*/ /*timer_restart(tmr_sab);timer_start(tmr_sab);*/ };
 void alarm_off() { alarm_state = false;/*disableInterrupt(PIN_LINE);*/  /*timer_stop(tmr_sab);*/ };
-void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(mainTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
+void resumeTask() { xTaskAbortDelay(mainTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool verifyRollbackLater() { return true; };
