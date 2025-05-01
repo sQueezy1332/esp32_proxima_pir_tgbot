@@ -23,7 +23,6 @@
 #endif
 #include "chip-debug-report.h"
 
-
 #if ARDUINO_USB_CDC_ON_BOOT || (defined CONFIG_IDF_TARGET_ESP32 && ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR)
 #define DEBUG_ENABLE
 #endif
@@ -42,8 +41,10 @@
 #endif // DEBUG_ENABLE
 #define uS esp_timer_get_time()
 #define delayms(x) vTaskDelay((x) / portTICK_PERIOD_MS)
-#define delayUntil(prev, tmr) vTaskDelayUntil((prev),(tmr))
+#define delayUntil(prev, tmr) vTaskDelayUntil((prev),pdMS_TO_TICKS(tmr))
 #define SEC(x) ((x)*1000000)
+//#define noInterrupts() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux)
+//#define interrupts() portEXIT_CRITICAL(&mux);}
 typedef const char cch; typedef const uint8_t cbyte; typedef uint32_t dword; typedef uint64_t qword;
 
 void nvs_init() {
