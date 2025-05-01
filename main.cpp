@@ -44,10 +44,16 @@ void sendTask(void*) {
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
 	uint64_t time = uS; uint32_t delta = time - last_interrupt;
+	//static uint64_t last_alarm = 0; static byte alarm_count = 0;
 	last_interrupt = time; interrupt_delta = delta; tgMessage_t tmp; //sizeof(tgMessage_t)
-	timer_restart(tmr_sab);
+	timer_restart(timer_sab);
 	if (alarm_state && (delta < 2400000) && (delta > 1000)) {
-		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
+		//if (time - last_alarm < 15* 60* 1000000) {
+			//if(++alarm_count )
+			tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
+			//alarm_count = 0;
+		//}
+		//else { last_alarm = time; return; }
 		//prev_alarm = ALARM;
 	} /*else if (prev_alarm != ok) {
 		tmp = { .status = ok, .delta = delta }; prev_alarm = ok;
@@ -71,7 +77,7 @@ void setup(void*) {
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
 	dWrite(PIN_LED, LED_ON);
-	CHECK_(timer_init(TIMER_SABOTAGE, tmr_sab, &sabotage_check, 1, 0));
+	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 1, 0));
 	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
@@ -135,6 +141,7 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 		Flag = RESEND_MSG; return;
 	}
 	if (!bot.sendMessage(msg)) { Flag = RESEND_MSG; return; }
+	if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
 	Flag = CHECK_MSG;
 }
 
@@ -193,6 +200,7 @@ void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
 		WiFi.removeEvent(event_id); event_id = 0;
 		resumeTask();
+	}
 }
 
 bool wifi_sta_init(byte wait_sec) {
@@ -386,15 +394,16 @@ void handleDocument(fb::Update& u) {
 
 void otaBegin(fb::Update& u, bool fw) {
 	dWrite(PIN_LED, LED_ON);
-	vTaskSuspend(sendTaskHandle);
+	vTaskSuspend(sendTaskHandle); timer_stop(timer_sab);
 	Message msg("OTA begin", u.message().chat().id()); bool ret;
 	bot.sendMessage(msg);
 	Fetcher fetch = bot.downloadFile(u.message().document().id());
 	if (!fetch) { msg.text = "Download error"; bot.sendMessage(msg); }
 	if (fw) ret = fetch.updateFlash();
 	else ret = fetch.updateFS();
-	if (ret) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; } 
-	else { msg.text = "Error"; bot.sendMessage(msg); } log_i("%u",uxTaskGetStackHighWaterMark2(NULL));
+	if (ret) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; }
+	else { msg.text = "Error"; bot.sendMessage(msg); } log_d("%u",uxTaskGetStackHighWaterMark2(NULL));
+	timer_restart(timer_sab); timer_start(timer_sab);
 	vTaskResume(sendTaskHandle);
 	dWrite(PIN_LED, LED_OFF); dWrite(PIN_LED, LED_OFF);
 }
@@ -411,6 +420,28 @@ void updateHandler(fb::Update& u) {
 #ifndef NO_BLE
 bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms) {
 	if (ble_data == nullptr || ble_data_length == 0) return false; DEBUGLN(ESP.getFreeHeap());
+	esp_ble_gap_ext_adv_params_t ext_adv_params_coded = {
+	.type = ESP_BLE_GAP_SET_EXT_ADV_PROP_NONCONN_NONSCANNABLE_UNDIRECTED,
+	.interval_min = 0x30,
+	.interval_max = 0x30,
+	.channel_map = ADV_CHNL_ALL,
+	.own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+	.filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
+	.tx_power = 126,
+	.primary_phy = ESP_BLE_GAP_PHY_CODED,
+	.max_skip = 0,
+	.secondary_phy = ESP_BLE_GAP_PHY_CODED,
+	.sid = 1,
+	.scan_req_notif = false,
+	};
+	if (!BLEDevice::getInitialized()) BLEDevice::init("");
+	BLEMultiAdvertising advert;
+	esp_ble_gap_set_preferred_default_phy(ESP_BLE_GAP_PHY_OPTIONS_PREF_S8_CODING, ESP_BLE_GAP_PHY_OPTIONS_PREF_S8_CODING);
+	advert.setAdvertisingParams(0, &ext_adv_params_coded);
+	advert.setDuration(0);
+	advert.setAdvertisingData(0, ble_data_length, ble_data);
+	advert.start(); delay(time_ms); advert.stop(0, (uint8_t*)0); advert.clear();
+	BLEDevice::deinit(); DEBUGLN(ESP.getFreeHeap());
 	return true;
 }
 #endif
@@ -440,11 +471,8 @@ String get_info(bool ver) {
 
 String create_hex_string(const byte* const& buf, const byte data_size) {
 	String str("", data_size * 3 - 1);
-	char* offset = &str[0]; uint32_t i = 0;
-	for (; i < data_size - 1; i++, offset += 3) {
-		sprintf(offset, "%02X ", buf[i]);
-	}
-	sprintf(offset, "%02X", buf[i]); //DEBUGLN(str.length());
+	byte2hexstr(&str[0], buf, data_size);
+	//DEBUGLN(str.length());
 	return str;
 }
 
@@ -480,4 +508,17 @@ jmp:
 	}
 	realloc(buf, data_len = i);
 	return true;
+}
+
+void byte2hexstr(char* text, const byte* buf, const byte data_size) {
+	byte shift, nibble, num; size_t i = 0;
+	for (;;) {
+		for (shift = 4, num = buf[i];; shift = 0) {
+			nibble = (num >> shift) & 0xF;
+			nibble < 10 ? *text++ = nibble ^ 0x30 : *text++ = nibble + ('A' - 10);
+			if (shift == 0) break;
+		}//1185140 //1185054
+		if(++i >= data_size) return;
+		*text++ = ' ';
+	}//*(text - 1) = '\0';
 }
