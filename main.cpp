@@ -92,9 +92,10 @@ void setup(void*) {
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates();
-	Message msg("", CHAT_ID); msg.text = std::move(get_info(true)); bot.sendMessage(msg);
+	Message msg("", CHAT_ID); msg.text = std::move(get_info(true)); 
+	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY); { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
+	bot.sendMessage(msg);
 	send_alarm_time(CHAT_ID, false);
-	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) bot.sendMessage(Message(("ESP_OTA_IMG_PENDING_VERIFY"), CHAT_ID));
 	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
 	alarm_on(); dWrite(PIN_LED, LED_OFF); log_i("SETUP END");
