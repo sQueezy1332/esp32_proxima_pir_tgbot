@@ -2,8 +2,9 @@
 
 extern "C" void app_main() {
 	main_init();
-	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
-	xTaskCreate(setup, "setup", 8192, NULL, 6, NULL);
+	setup((void*)0);
+	//xTaskCreate(setup, "setup", 8192, NULL, 6, NULL);
+	log_d("%u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void mainTask(void*) {
@@ -37,7 +38,7 @@ void mainTask(void*) {
 void sendTask(void*) {
 	for (tgMessage_t tmp;;) {
 		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
-			tg_send(tmp); delay(900);
+			tg_send(tmp); delay(1000);
 		}
 	}
 }
@@ -57,7 +58,7 @@ static void IRAM_ATTR ISR() {
 		//prev_alarm = ALARM;
 	} /*else if (prev_alarm != ok) {
 		tmp = { .status = ok, .delta = delta }; prev_alarm = ok;
-	} */else return;
+	} */else return; 
 	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
 }
 
@@ -77,7 +78,7 @@ void setup(void*) {
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
 	dWrite(PIN_LED, LED_ON);
-	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 1, 0));
+	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0));
 	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
@@ -85,7 +86,7 @@ void setup(void*) {
 	read_credentials();
 	wifi_sta_init();
 #ifdef DEBUG_ENABLE
-	WiFi.printDiag(Serial); log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
+	WiFi.printDiag(Serial); //log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
 #endif 
 	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org");
 	time_sync();
@@ -93,13 +94,14 @@ void setup(void*) {
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates();
 	Message msg("", CHAT_ID); msg.text = std::move(get_info(true)); 
-	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY); { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
+	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
 	bot.sendMessage(msg);
 	send_alarm_time(CHAT_ID, false);
-	mainTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
+	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
+	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
-	alarm_on(); dWrite(PIN_LED, LED_OFF); log_i("SETUP END");
-	vTaskDelete(NULL);
+	alarm_on(); timer_start(timer_sab); dWrite(PIN_LED, LED_OFF);
+	//vTaskDelete(NULL);
 }
 
 void time_sync(byte wait_sec) {
@@ -128,7 +130,8 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	{String str("", str_len);
 	if (heap - 5000 < str_len || !str.length()) {
 		log_i("Not enough heap"); msg.text = "Not enough heap"; bot.sendMessage(msg); return;
-	} time_t timestamp = 0; struct tm timeinfo; char* с = &str[0];
+	} 
+	char* с = &str[0]; time_t timestamp = 0; struct tm timeinfo;
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
 		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
@@ -272,11 +275,12 @@ void wifi_server_init() {
 #endif
 	//ElegantOTA.onEnd(onOTAEnd);
 	//ElegantOTA.begin(&server);
+	log_d("server.begin()");
 	server.begin(); // Start server
 }
 
 void onConfigRequest(AsyncWebServerRequest* request) {
-	AsyncWebParameter* pSSID = request->getParam(0), * pPASS = request->getParam(1);
+	const AsyncWebParameter* pSSID = request->getParam(0), * pPASS = request->getParam(1);
 	bool wrongSSID = pSSID->value().length() == 0, wrongPASS = pPASS->value().length() < 8;
 	if (wrongSSID && wrongPASS) {
 		request->send(200, "text/plain", "WRONG INPUT");
@@ -466,7 +470,7 @@ String get_info(bool ver) {
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000));
-	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; }log_d("%u", str.length());
+	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n'; } log_d("%u", str.length());
 	return str;
 }
 
@@ -474,7 +478,7 @@ String create_hex_string(const byte* const& buf, const byte data_size) {
 	String str("", data_size * 3 - 1);
 	byte2hexstr(&str[0], buf, data_size);
 	//DEBUGLN(str.length());
-	return str;
+	return str; (void)1;
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin) {
