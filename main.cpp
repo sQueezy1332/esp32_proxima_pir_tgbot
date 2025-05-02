@@ -38,8 +38,8 @@ void mainTask(void*) {
 void sendTask(void*) {
 	for (tgMessage_t tmp;;) {
 		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
-			tg_send(tmp); delay(1000);
-		}
+			tg_send(tmp); delay(900);
+		}//vTaskGetInfo();
 	}
 }
 /*		INTERRUPTS		*/
@@ -51,14 +51,14 @@ static void IRAM_ATTR ISR() {
 	if (alarm_state && (delta < 2400000) && (delta > 1000)) {
 		//if (time - last_alarm < 15* 60* 1000000) {
 			//if(++alarm_count )
-			tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
-			//alarm_count = 0;
-		//}
-		//else { last_alarm = time; return; }
-		//prev_alarm = ALARM;
+		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
+		//alarm_count = 0;
+	//}
+	//else { last_alarm = time; return; }
+	//prev_alarm = ALARM;
 	} /*else if (prev_alarm != ok) {
 		tmp = { .status = ok, .delta = delta }; prev_alarm = ok;
-	} */else return; 
+	} */else return;
 	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
 }
 
@@ -93,13 +93,13 @@ void setup(void*) {
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates();
-	Message msg("", CHAT_ID); msg.text = std::move(get_info(true)); 
+	Message msg("", CHAT_ID); msg.text = std::move(get_info(true));
 	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
 	bot.sendMessage(msg);
 	send_alarm_time(CHAT_ID, false);
 	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
-	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 4, xMainStack, &xMainTaskBuffer);
-	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 5, xSendStack, &xSendTaskBuffer);
+	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, MAINTASKPRIO, xMainStack, &xMainTaskBuffer);
+	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, SENDTASKPRIO, xSendStack, &xSendTaskBuffer);
 	alarm_on(); timer_start(timer_sab); dWrite(PIN_LED, LED_OFF);
 	//vTaskDelete(NULL);
 }
@@ -127,11 +127,12 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap();
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
-	{String str("", str_len);
+	String str("", str_len);
 	if (heap - 5000 < str_len || !str.length()) {
-		log_i("Not enough heap"); msg.text = "Not enough heap"; bot.sendMessage(msg); return;
-	} 
-	char* с = &str[0]; time_t timestamp = 0; struct tm timeinfo;
+		log_e("No enough memory for the operation."); msg.text = "No enough memory for the operation.";
+		bot.sendMessage(msg); return; 
+	}
+	char* с = str.begin(); time_t timestamp = 0; struct tm timeinfo;
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
 		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
@@ -139,7 +140,7 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 		offset += 18;
 		с[offset - 1] = '\n';
 	}	с[str_len] = '\0';
-	msg.text = std::move(str); DEBUGLN(msg.text); }
+	msg.text = std::move(str); DEBUGLN(msg.text); 
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
@@ -280,13 +281,13 @@ void wifi_server_init() {
 }
 
 void onConfigRequest(AsyncWebServerRequest* request) {
-	const AsyncWebParameter* pSSID = request->getParam(0), * pPASS = request->getParam(1);
+	auto pSSID = request->getParam(0), pPASS = request->getParam(1);
 	bool wrongSSID = pSSID->value().length() == 0, wrongPASS = pPASS->value().length() < 8;
 	if (wrongSSID && wrongPASS) {
 		request->send(200, "text/plain", "WRONG INPUT");
 		return;
 	}
-	String log;
+	String log("", 64);
 	if (!wrongSSID) {
 		ssid = pSSID->value(); //pSSID->value().length()
 		if (!writeFile(SSID_PATH, ssid)) {
@@ -318,10 +319,10 @@ void tg_send(tgMessage_t& tmp) {
 		case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 		case LINE_LOW:  msg.text = "LINE_LOW"; break;
 		default: msg.text = "ALARM"; //msg.text = (uint8_t)tmp.status; log_d("default");
-		} DEBUGLN(msg.text);
+		} log_d("%s", msg.text.c_str());
 		//if (tmp.status != ok) 
 		{ msg.text += '\t'; msg.text += (tmp.delta); }
-		DEBUGLN(xTaskGetTickCount()); //while (bot.isPolling()) { delay(100); }
+		 //while (bot.isPolling()) { delay(100); }
 		if (!bot.sendMessage(msg)) {
 save:
 		//	if (tmp.status != ok)
@@ -330,7 +331,7 @@ save:
 			}
 		}
 		if (Flag != RESEND_MSG) Flag = CHECK_MSG;
-	}DEBUGLN(xTaskGetTickCount());
+	}log_v("");
 	dWrite(PIN_LED, LED_OFF);
 }
 
@@ -339,30 +340,34 @@ void handleMessage(fb::Update& u) {
 	switch (u.message().text().hash()) {
 	case SH("/connect"):
 		msg.text = "ESP will stay connected";
-		bot.sendMessage(msg); Flag = CHECK_MSG; break;
+		Flag = CHECK_MSG; break;
 	case SH("/disconnect"):
-		msg.text = "Disconnecting..."; bot.sendMessage(msg);
+		msg.text = "Disconnecting...";
 		Flag = WIFI_DISCONNECT; break;
 	case SH("/alarm_on"):
-		msg.text = "Alarm on"; bot.sendMessage(msg);
+		msg.text = "Alarm on";
 		alarm_on(); break;
 	case SH("/alarm_off"):
-		msg.text = "Alarm off"; bot.sendMessage(msg);
+		msg.text = "Alarm off";
 		alarm_off(); break;
 	case SH("/get_info"):
 		msg.text = std::move(get_info());
-		bot.sendMessage(msg); break;
+		break;
+	case SH("/get_tasks"):
+		msg.text = std::move(get_task_list()); break;
+		//msg.text = get_task_list(); break;
 	case SH("/restart"):
-		msg.text = "ESP restarting..."; bot.sendMessage(msg);
+		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
 	case SH("/send_alarm"):
 		send_alarm_time(msg.chatID); break;
 	case SH("/clear_alarm"):
 		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file";
-		bot.sendMessage(msg); break;
+		break;
 	case SH("/valid"):
 		esp_ota_mark_app_valid_cancel_rollback();
-		msg.text += (int)img_state(); bot.sendMessage(msg);  break;
+		msg.text += (int)img_state(); break;
+	//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
 	case SH(RELAY_ON):
 		dWrite(PIN_RELAY, HIGH);
@@ -372,21 +377,24 @@ void handleMessage(fb::Update& u) {
 		bot.sendMessage(Message("RELAY OFF", chat)); break;
 #endif
 #ifndef NO_BLE
-	case SH("/ble"): bot.sendMessage(Message(
+	case SH("/ble"):
 		msg.text = ble_advertising(ble_data, ble_data_size) ? "BLE data sended" : "BLE data empty";
-		bot.sendMessage(msg); break;
-	case SH("/ble_clear"): free(ble_data); ble_data = nullptr; ble_data_size = 0;
-		msg.text = "Done"; bot.sendMessage(msg); break;
+		break;
+	case SH("/ble_clear"): 
+		free(ble_data); ble_data = nullptr; ble_data_size = 0;
+		msg.text = "Done"; break;
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
 				msg.text = std::move(create_hex_string(ble_data, ble_data_size));
 			} else msg.text = "Wrong format";
-			bot.sendMessage(msg);
-		} else { msg.text = "Unknown"; bot.sendMessage(msg); }
+		} else { msg.text = "Unknown"; }
 	}
-#endif
-	}
+#else
+	default: msg.text = "Unknown";
+#endif 
+	}DEBUGLN(msg.text);
+	bot.sendMessage(msg);
 }
 
 void handleDocument(fb::Update& u) {
@@ -406,8 +414,7 @@ void otaBegin(fb::Update& u, bool fw) {
 	if (!fetch) { msg.text = "Download error"; bot.sendMessage(msg); }
 	if (fw) ret = fetch.updateFlash();
 	else ret = fetch.updateFS();
-	if (ret) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; }
-	else { msg.text = "Error"; bot.sendMessage(msg); } log_d("%u",uxTaskGetStackHighWaterMark2(NULL));
+	if (ret) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; } else { msg.text = "Error"; bot.sendMessage(msg); } log_d("%u", uxTaskGetStackHighWaterMark2(NULL));
 	timer_restart(timer_sab); timer_start(timer_sab);
 	vTaskResume(sendTaskHandle);
 	dWrite(PIN_LED, LED_OFF); dWrite(PIN_LED, LED_OFF);
@@ -424,6 +431,8 @@ void updateHandler(fb::Update& u) {
 /*		BLUETOOTH		*/
 #ifndef NO_BLE
 bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms) {
+	if (ble_data == nullptr || ble_data_length == 0) return false; DEBUGLN(ESP.getFreeHeap());
+	
 	return true;
 }
 #endif
@@ -438,8 +447,16 @@ void read_credentials() {
 	} DEBUGLN(ssid); DEBUGLN(pass);
 }
 
+
+String get_task_list() {
+	auto len = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", len);
+	String str("", len * 32);
+	vTaskList(str.begin());
+	return str;
+}
 String get_info(bool ver) {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; String str; str.reserve(256);
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; 
+	String str; str.reserve(255);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
@@ -453,7 +470,7 @@ String get_info(bool ver) {
 
 String create_hex_string(const byte* const& buf, const byte data_size) {
 	String str("", data_size * 3 - 1);
-	byte2hexstr(&str[0], buf, data_size);
+	byte2hexstr(str.begin(), buf, data_size);
 	//DEBUGLN(str.length());
 	return str; (void)1;
 }
@@ -500,7 +517,7 @@ void byte2hexstr(char* text, const byte* buf, const byte data_size) {
 			nibble < 10 ? *text++ = nibble ^ 0x30 : *text++ = nibble + ('A' - 10);
 			if (shift == 0) break;
 		}//1185140 //1185054
-		if(++i >= data_size) return;
+		if (++i >= data_size) return;
 		*text++ = ' ';
 	}//*(text - 1) = '\0';
 }
