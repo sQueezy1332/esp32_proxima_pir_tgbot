@@ -13,8 +13,15 @@
 #pragma message "CONFIG_AUTOSTART_ARDUINO"
 #endif
 #ifdef CONFIG_BT_ENABLED
-#include "esp32-hal-bt.h"
+#include "esp_bt.h" 
+#if CONFIG_IDF_TARGET_ESP32
+bool btInUse()__weak_symbol; //overwritten in esp32-hal-bt.c
+bool btInUse() { return false; }
+#else
+extern bool btInUse() __weak_symbol; 
+#endif
 #endif  //CONFIG_BT_ENABLED
+
 #if (ARDUINO_USB_CDC_ON_BOOT | ARDUINO_USB_MSC_ON_BOOT | ARDUINO_USB_DFU_ON_BOOT) && !ARDUINO_USB_MODE
 #include "USB.h"
 #if ARDUINO_USB_MSC_ON_BOOT
@@ -43,8 +50,8 @@
 #define delayms(x) vTaskDelay((x) / portTICK_PERIOD_MS)
 #define delayUntil(prev, tmr) vTaskDelayUntil((prev),pdMS_TO_TICKS(tmr))
 #define SEC(x) ((x)*1000000)
-//#define noInterrupts() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux)
-//#define interrupts() portEXIT_CRITICAL(&mux);}
+#define ENTER_CRITICAL() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux)
+#define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);}
 typedef const char cch; typedef const uint8_t cbyte; typedef uint32_t dword; typedef uint64_t qword;
 
 void nvs_init() {
@@ -55,8 +62,7 @@ void nvs_init() {
 			err = esp_partition_erase_range(partition, 0, partition->size);
 			if (err != ESP_OK) err = nvs_flash_init();
 			else log_e("Failed to format the broken NVS partition!");
-		}
-		else log_e("Could not find NVS partition");
+		} else log_e("Could not find NVS partition");
 	}
 	if (err) log_e("Failed to initialize NVS! Error: %u", err);
 }
@@ -71,19 +77,8 @@ esp_ota_img_states_t img_state(bool valid = true) {
 	}
 	return ota_state;
 }
-__weak_symbol extern bool verifyRollbackLater();
-#endif
-
-#undef CONFIG_AUTOSTART_ARDUINO
-#ifdef CONFIG_BT_ENABLED
-#if CONFIG_IDF_TARGET_ESP32
- bool btInUse()__weak_symbol; //overwritten in esp32-hal-bt.c
- bool btInUse() {return false;}
-#else
-__weak_symbol extern bool btInUse();//from esp32-hal-bt.c
-#endif
+extern bool verifyRollbackLater()__weak_symbol;
 #endif 
-
 void main_init() {
 	//init proper ref tick value for PLL (uncomment if REF_TICK is different than 1MHz)
 //ESP_REG(APB_CTRL_PLL_TICK_CONF_REG) = APB_CLK_FREQ / REF_CLK_FREQ - 1;
@@ -97,7 +92,7 @@ void main_init() {
 	setCpuFrequencyMhz(F_CPU / 1000000);
 #endif
 #if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE || defined DEBUG_ENABLE
-	log_d("Serial begin\n"); Serial.begin(115200);
+	log_d("Serial begin"); Serial.begin(115200);
 #endif
 #if ARDUINO_USB_MSC_ON_BOOT && !ARDUINO_USB_MODE
 	MSC_Update.begin();
@@ -108,22 +103,20 @@ void main_init() {
 #if ARDUINO_USB_ON_BOOT && !ARDUINO_USB_MODE
 	USB.begin();
 #endif
-#if CONFIG_AUTOSTART_ARDUINO
-#pragma message "initArduino"
-	log_d("initArduino\n")
-		initArduino();
-#else
 	nvs_init();
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
 #ifdef CONFIG_BT_ENABLED
-	//if (!btInUse()) { log_d("bt_mem_release");esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);}
+	if (!&btInUse)
+	{ log_d("bt_mem_release"); auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_d("%i", ret); }
 #endif
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 	if (!&verifyRollbackLater) { log_d("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
 #endif
-#endif
+//#endif
+	//log_d("end");
 }
 //xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE);
+#undef CONFIG_AUTOSTART_ARDUINO
 #if CONFIG_AUTOSTART_ARDUINO
 TaskHandle_t loopTaskHandle = NULL;
 #if not defined ARDUINO_LOOP_STACK_SIZE && !defined CONFIG_ARDUINO_LOOP_STACK_SIZE
