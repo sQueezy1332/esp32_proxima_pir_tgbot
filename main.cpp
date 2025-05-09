@@ -127,20 +127,21 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap();
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
-	String str("", str_len);
-	if (heap - 5000 < str_len || !str.length()) {
+	if (!msg.text.reserve(str_len) || heap - 5000 < str_len) {
 		log_e("No enough memory for the operation."); msg.text = "No enough memory for the operation.";
 		bot.sendMessage(msg); return; 
 	}
-	char* с = str.begin(); time_t timestamp = 0; struct tm timeinfo;
+	char* с = msg.text.begin(); time_t timestamp = 0; struct tm timeinfo;
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
 		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
 		strftime(&с[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
 		offset += 18;
 		с[offset - 1] = '\n';
-	}	с[str_len] = '\0';
-	msg.text = std::move(str); DEBUGLN(msg.text); 
+	}	
+	с[str_len] = '\0';
+	((uint32_t*)&c)[2] = str_len; //incapsulation hack //_ptr.len
+	DEBUGLN(msg.text); 
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
