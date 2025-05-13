@@ -156,7 +156,7 @@ bool appendFile(cch* path, _time_t value);
 bool deleteFile(cch* path);
 void onWiFiConnected(arduino_event_id_t event);
 void get_task_list(String& str);
-void get_info(bool ver = false);
+String get_info(bool ver = false);
 void wifi_server_init();
 bool wifi_sta_init(byte wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
