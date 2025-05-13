@@ -119,7 +119,7 @@ void time_sync(byte wait_sec) {
 }
 /*		FILE SYSTEM	*/
 void send_alarm_time(Value const& chat_id, bool no_file) {
-	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); Message msg; msg.chatID = chat_id;
+	Message msg; msg.chatID = chat_id; DEBUG("Reading file: "); DEBUGLN(ALARM_PATH);
 	fs::File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
@@ -366,8 +366,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file";
 		break;
 	case SH("/valid"):
-		esp_ota_mark_app_valid_cancel_rollback();
-		msg.text += (int)img_state(); break;
+		msg.text = (int)img_state(true); break;
 	//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
 	case SH(RELAY_ON):
@@ -470,10 +469,21 @@ String get_info(bool ver) {
 }
 
 String create_hex_string(const byte* const& buf, const byte data_size) {
-	String str("", data_size * 3 - 1);
-	byte2hexstr(str.begin(), buf, data_size);
+	String str;
+	byte shift, nibble, num; size_t i = 0, str_len = data_size * 3;
+	char * text = str.begin():
+	str.reserve(str_len); ((uint32_t*)&text)[2] = str_len;
+	for (;;) {
+		for (shift = 4, num = buf[i];; shift = 0) {
+			nibble = (num >> shift) & 0xF;
+			nibble < 10 ? *text++ = nibble ^ 0x30 : *text++ = nibble + ('A' - 10);
+			if (shift == 0) break;
+		}//1185140 //1185054
+		if (++i >= data_size) break;
+		*text++ = ' ';
+	}//*(text - 1) = '\0';
 	//DEBUGLN(str.length());
-	return str; (void)1;
+	return str;
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin) {
@@ -508,17 +518,4 @@ jmp:
 	}
 	realloc(buf, data_len = i);
 	return true;
-}
-
-void byte2hexstr(char* text, const byte* buf, const byte data_size) {
-	byte shift, nibble, num; size_t i = 0;
-	for (;;) {
-		for (shift = 4, num = buf[i];; shift = 0) {
-			nibble = (num >> shift) & 0xF;
-			nibble < 10 ? *text++ = nibble ^ 0x30 : *text++ = nibble + ('A' - 10);
-			if (shift == 0) break;
-		}//1185140 //1185054
-		if (++i >= data_size) return;
-		*text++ = ' ';
-	}//*(text - 1) = '\0';
 }
