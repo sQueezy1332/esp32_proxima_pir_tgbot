@@ -96,10 +96,8 @@ void setup(void*) {
 	time_sync();
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
-	bot.skipUpdates();
-	Message msg("", CHAT_ID); msg.text = std::move(get_info(true));
-	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
-	bot.sendMessage(msg);
+	bot.skipUpdates(-2);
+	bot.sendMessage(get_info(true));
 	send_alarm_time(CHAT_ID, false);
 	//vTaskDelete(NULL);
 }
@@ -355,8 +353,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = std::move(get_info());
 		break;
 	case SH("/get_tasks"):
-		msg.text = std::move(get_task_list()); break;
-		//msg.text = get_task_list(); break;
+		get_task_list(msg.text); break;
 	case SH("/restart"):
 		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
@@ -386,7 +383,7 @@ void handleMessage(fb::Update& u) {
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
-				msg.text = std::move(create_hex_string(ble_data, ble_data_size));
+				create_hex_string(msg.text, ble_data, ble_data_size);
 			} else msg.text = "Wrong format";
 		} else { msg.text = "Unknown"; }
 	}
@@ -448,7 +445,7 @@ void read_credentials() {
 }
 
 
-String get_task_list() {
+void get_task_list(String& str) {
 	auto len = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", len);
 	String str; vTaskList(str.begin());
 	((uint32_t*)&text)[2] = strlen(str.begin);
@@ -464,11 +461,14 @@ String get_info(bool ver) {
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000));
-	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n'; } log_d("%u", str.length());
+	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
+		 if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { 
+			 str += "ESP_OTA_IMG_PENDING_VERIFY"; }
+	} log_d("%u", str.length());
 	return str;
 }
 
-void create_hex_string(String & str, const byte* const& buf, const byte data_size) {
+void create_hex_string(String& str, const byte* const& buf, const byte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
 	char * text = str.begin():
 	str.reserve(str_size); ((uint32_t*)&text)[2] = str_size - 1;
