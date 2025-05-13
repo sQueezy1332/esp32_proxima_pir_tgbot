@@ -3,6 +3,10 @@
 extern "C" void app_main() {
 	main_init();
 	setup((void*)0);
+	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
+	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
+	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
+	alarm_on(); timer_start(timer_sab); dWrite(PIN_LED, LED_OFF);
 	//xTaskCreate(setup, "setup", 8192, NULL, 6, NULL);
 	log_d("%u", uxTaskGetStackHighWaterMark2(NULL));
 }
@@ -97,10 +101,6 @@ void setup(void*) {
 	if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { msg.text += "ESP_OTA_IMG_PENDING_VERIFY"; }
 	bot.sendMessage(msg);
 	send_alarm_time(CHAT_ID, false);
-	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
-	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, MAINTASKPRIO, xMainStack, &xMainTaskBuffer);
-	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, SENDTASKPRIO, xSendStack, &xSendTaskBuffer);
-	alarm_on(); timer_start(timer_sab); dWrite(PIN_LED, LED_OFF);
 	//vTaskDelete(NULL);
 }
 
