@@ -450,8 +450,8 @@ void read_credentials() {
 
 String get_task_list() {
 	auto len = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", len);
-	String str("", len * 32);
-	vTaskList(str.begin());
+	String str; vTaskList(str.begin());
+	((uint32_t*)&text)[2] = strlen(str.begin);
 	return str;
 }
 String get_info(bool ver) {
@@ -468,22 +468,20 @@ String get_info(bool ver) {
 	return str;
 }
 
-String create_hex_string(const byte* const& buf, const byte data_size) {
-	String str;
-	byte shift, nibble, num; size_t i = 0, str_len = data_size * 3;
+void create_hex_string(String & str, const byte* const& buf, const byte data_size) {
+	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
 	char * text = str.begin():
-	str.reserve(str_len); ((uint32_t*)&text)[2] = str_len;
+	str.reserve(str_size); ((uint32_t*)&text)[2] = str_size - 1;
 	for (;;) {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
-			nibble < 10 ? *text++ = nibble ^ 0x30 : *text++ = nibble + ('A' - 10);
+			nibble < 10 ? *text = nibble ^ 0x30 : *text = nibble + ('A' - 10);
+			text++;
 			if (shift == 0) break;
-		}//1185140 //1185054
+		}
 		if (++i >= data_size) break;
 		*text++ = ' ';
-	}//*(text - 1) = '\0';
-	//DEBUGLN(str.length());
-	return str;
+	} *text = '\0';//DEBUGLN(str.length());
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin) {
