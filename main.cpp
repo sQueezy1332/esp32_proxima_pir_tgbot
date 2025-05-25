@@ -86,7 +86,7 @@ void setup(void*) {
 	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
-	wifi_server_init();
+	//wifi_server_init();
 	read_credentials();
 	wifi_sta_init();
 #ifdef DEBUG_ENABLE
@@ -97,7 +97,7 @@ void setup(void*) {
 	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
 	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
 	bot.skipUpdates(-2);
-	bot.sendMessage(get_info(true));
+	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	send_alarm_time(CHAT_ID, false);
 	//vTaskDelete(NULL);
 }
@@ -126,20 +126,20 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap();
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!msg.text.reserve(str_len) || heap - 5000 < str_len) {
-		log_e("No enough memory for the operation."); msg.text = "No enough memory for the operation.";
-		bot.sendMessage(msg); return; 
+		msg.text = "No enough memory for the operation.";
+		bot.sendMessage(msg); return;
 	}
-	char* с = msg.text.begin(); time_t timestamp = 0; struct tm timeinfo;
+	char* ptr = msg.text.begin(); time_t timestamp = 0; struct tm timeinfo;
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
 		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
-		strftime(&с[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
+		strftime(&ptr[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
 		offset += 18;
-		с[offset - 1] = '\n';
-	}	
-	с[str_len] = '\0';
-	((uint32_t*)&c)[2] = str_len; //incapsulation hack //_ptr.len
-	DEBUGLN(msg.text); 
+		ptr[offset - 1] = '\n';
+	}
+	ptr[str_len] = '\0';
+	((uint32_t*)&ptr)[2] = str_len; //incapsulation hack //_ptr.len
+	DEBUGLN(msg.text);
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 		Flag = RESEND_MSG; return;
@@ -377,7 +377,7 @@ void handleMessage(fb::Update& u) {
 	case SH("/ble"):
 		msg.text = ble_advertising(ble_data, ble_data_size) ? "BLE data sended" : "BLE data empty";
 		break;
-	case SH("/ble_clear"): 
+	case SH("/ble_clear"):
 		free(ble_data); ble_data = nullptr; ble_data_size = 0;
 		msg.text = "Done"; break;
 	default: {
@@ -429,7 +429,7 @@ void updateHandler(fb::Update& u) {
 #ifndef NO_BLE
 bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms) {
 	if (ble_data == nullptr || ble_data_length == 0) return false; DEBUGLN(ESP.getFreeHeap());
-	
+
 	return true;
 }
 #endif
@@ -446,13 +446,15 @@ void read_credentials() {
 
 
 void get_task_list(String& str) {
-	auto len = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", len);
-	String str; vTaskList(str.begin());
-	((uint32_t*)&text)[2] = strlen(str.begin);
-	return str;
+	auto num = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", num);
+	char* ptr = str.begin(); 
+	if (str.reserve(num * 30)) {
+		vTaskList(ptr);
+		((uint32_t*)&ptr)[2] = strlen(ptr);
+	}
 }
 String get_info(bool ver) {
-	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000; 
+	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(255);
 	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
@@ -461,27 +463,29 @@ String get_info(bool ver) {
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000));
-	if (ver) { str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
-		 if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { 
-			 str += "ESP_OTA_IMG_PENDING_VERIFY"; }
+	if (ver) {
+		str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
+		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) {
+			str += "ESP_OTA_IMG_PENDING_VERIFY";
+		}
 	} log_d("%u", str.length());
 	return str;
 }
 
 void create_hex_string(String& str, const byte* const& buf, const byte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
-	char * text = str.begin():
-	str.reserve(str_size); ((uint32_t*)&text)[2] = str_size - 1;
+	char* ptr = str.begin(); if(!str.reserve(str_size)) return; 
+	((uint32_t*)&ptr)[2] = str_size - 1;
 	for (;;) {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
-			nibble < 10 ? *text = nibble ^ 0x30 : *text = nibble + ('A' - 10);
-			text++;
+			nibble < 10 ? *ptr = nibble ^ 0x30 : *ptr = nibble + ('A' - 10);
+			ptr++;
 			if (shift == 0) break;
 		}
 		if (++i >= data_size) break;
-		*text++ = ' ';
-	} *text = '\0';//DEBUGLN(str.length());
+		*ptr++ = ' ';
+	} *ptr = '\0';//DEBUGLN(str.length());
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin) {
