@@ -1,5 +1,4 @@
 #pragma once
-#undef CONFIG_AUTOSTART_ARDUINO
 #define CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT 1
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,15 +11,15 @@
 #include "Arduino.h"
 #pragma message "CONFIG_AUTOSTART_ARDUINO"
 #endif
-#ifdef CONFIG_BT_ENABLED
+#if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
 #include "esp_bt.h" 
 #if CONFIG_IDF_TARGET_ESP32
-bool btInUse()__weak_symbol; //overwritten in esp32-hal-bt.c
+bool btInUse() __weak_symbol; //overwritten in esp32-hal-bt.c
 bool btInUse() { return false; }
 #else
-extern bool btInUse() __weak_symbol; 
+/*extern */__weak_symbol bool btInUse() { return true; }
 #endif
-#endif  //CONFIG_BT_ENABLED
+#endif
 
 #if (ARDUINO_USB_CDC_ON_BOOT | ARDUINO_USB_MSC_ON_BOOT | ARDUINO_USB_DFU_ON_BOOT) && !ARDUINO_USB_MODE
 #include "USB.h"
@@ -38,13 +37,13 @@ extern bool btInUse() __weak_symbol;
 #define DEBUG(x) Serial.print(x)
 #define DEBUGLN(x) Serial.println(x)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
-#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
+#define _CHECK(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
 #else
 #define DEBUG(x)
 #define DEBUGLN(x) 
 #define DEBUGF(x, ...)
 #define NDEBUG
-#define CHECK_(x) (void)(x);
+#define _CHECK(x) (void)(x);
 #endif // DEBUG_ENABLE
 #define uS esp_timer_get_time()
 #define delayms(x) vTaskDelay((x) / portTICK_PERIOD_MS)
@@ -77,7 +76,7 @@ esp_ota_img_states_t img_state(bool valid = true) {
 	}
 	return ota_state;
 }
-extern bool verifyRollbackLater()__weak_symbol;
+//__weak_symbol bool verifyRollbackLater() { return true; }
 #endif 
 void main_init() {
 	//init proper ref tick value for PLL (uncomment if REF_TICK is different than 1MHz)
@@ -103,17 +102,20 @@ void main_init() {
 #if ARDUINO_USB_ON_BOOT && !ARDUINO_USB_MODE
 	USB.begin();
 #endif
+#if CONFIG_SPIRAM_SUPPORT || CONFIG_SPIRAM
+#ifndef CONFIG_SPIRAM_BOOT_INIT
+	psramAddToHeap();
+#endif
+#endif
 	nvs_init();
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
-#ifdef CONFIG_BT_ENABLED
-	if (!&btInUse)
-	{ log_d("bt_mem_release"); auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_d("%i", ret); }
+#if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
+	if (!btInUse())
+	{ auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret); }
 #endif
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
-	if (!&verifyRollbackLater) { log_d("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
+	//if (!verifyRollbackLater()) { log_i("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
 #endif
-//#endif
-	//log_d("end");
 }
 //xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE);
 #undef CONFIG_AUTOSTART_ARDUINO
