@@ -2,7 +2,8 @@
 #pragma GCC diagnostic ignored "-fpermissive"
 #define _WANT_USE_LONG_TIME_T
 #define _USE_LONG_TIME_T
-//#define FB_NO_FILE
+//#define USE_ESP_IDF_LOG
+//#define DEBUG_ENABLE
 #include <MAIN.h>
 #include <FastBot2.h>
 #include <GyverIO.h>
@@ -17,49 +18,15 @@
 #define NO_BLE
 #endif
 #include <BLEDevice.h>
-#include <BLEAdvertisedDevice.h>
+#include <BLEAdvertising.h>
+#include "OTAserver.h"
+#include "credits.h"
+//#include "BLE_api.h"
 
-#if CORE_DEBUG_LEVEL
-#define DEBUG_ENABLE
-#endif
-#ifdef DEBUG_ENABLE
-#pragma message "debug enable"
-#define DEBUG(x) Serial.print(x)
-#define DEBUGLN(x) Serial.println(x)
-#define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
-#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
-#define BOT_TOKEN ""
-#define USER_ID "" 
-#define CHAT_ID USER_ID
-#define SSID_HIDDEN 0
-#else
-#define DEBUG(x)
-#define DEBUGLN(x) 
-#define DEBUGF(x, ...)
-#define CHECK_(x) (void)(x);
-#define NDEBUG
-#define BOT_TOKEN ""
-#define USER_ID "" 
-#define CHAT_ID "" 
-#define SSID_HIDDEN 1
-#endif // DEBUG_ENABLE
-#define ERR_CHECK(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x)
-//#define ESP32C3_LUATOS
-#define NO_BLE
-#define AP_SSID ""
-#define DEFAULT_SSID ""
-#define DEFAULT_PASS ""
-#define WIFI_CHANNEL 13
-#define AP_PASS ""
-#define CHANGE_AUTH "/config"
-#define BLE_SET "/ble_set"
-#define RELAY_ON "/relay_on"
-#define RELAY_OFF "relay_off"
-#define SSID_PATH "/ssid.txt"
-#define PASS_PATH "/pass.txt"
-#define ALARM_PATH "/alarm.txt"
+#define ESP32C3_LUATOS
+//#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-#define PIN_LINE 4
+#define PIN_LINE 9//4
 #define PIN_PULLUP 5
 #define PIN_BUTTON 9
 #define PIN_RELAY 8
@@ -84,7 +51,7 @@
 #endif
 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
-#define SEND_TASK_STACK_SIZE (8 * 1024)
+#define SEND_TASK_STACK_SIZE (4 * 1024)
 #define QUEUE_ITEM_SIZE (sizeof(tgMessage_t))
 #define QUEUE_SIZE (32 * QUEUE_ITEM_SIZE)
 
@@ -99,7 +66,7 @@
 #define TIMER_CHECK		1000000
 #define TIMER_RESEND	60 * 1000000ul
 typedef uint32_t _time_t;
-using namespace fb;
+using fb::Message, fb::Fetcher;
 
 typedef enum : uint8_t {
 	ok = 0,
@@ -112,6 +79,7 @@ typedef enum : uint8_t {
 	WIFI_INIT,
 	WIFI_RECON,
 	RESTART,
+	PANIC,
 } stat_t;
 
 typedef struct /*__attribute__((packed))*/ {
@@ -121,31 +89,30 @@ typedef struct /*__attribute__((packed))*/ {
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
-TaskHandle_t loopTaskHandle,sendTaskHandle;
+TaskHandle_t loopTaskHandle, sendTaskHandle;
 QueueHandle_t QueueStatHandle;
 StaticQueue_t pxStaticQueue;
 uint8_t QueueStatStorage[QUEUE_SIZE];
 
 //static volatile stat_t prev_alarm = ok;
 static stat_t Flag = ok;
-bool alarm_state = 0;
+bool alarm_state = false;
 volatile uint64_t last_interrupt = 0;
 volatile uint32_t interrupt_delta = 0;
 _time_t timestamp_unix;
-uint64_t timestamp_sync;
+uint64_t time_sync_unix;
+network_event_handle_t event_id = 0;
+gptimer_handle_t timer_sab = nullptr;
+String ssid, pass, _login, _password;
+AsyncWebServer server(80);
+FastBot2 bot;
 #ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
 #endif
-network_event_handle_t event_id = 0;
-gptimer_handle_t timer_sab = nullptr;
-String ssid, pass;
-AsyncWebServer server(80);
-FastBot2 bot;
-
 void mainTask(void*);
 void sendTask(void*);
-void setup(void*);
+void setup();
 static void IRAM_ATTR ISR();
 bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
@@ -160,21 +127,60 @@ String get_info(bool ver = false);
 void wifi_server_init();
 bool wifi_sta_init(byte wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
-bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms = 500);
-void send_alarm_time(Value const& chat_id, bool no_file = true);
-void tg_send(tgMessage_t&);
+esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
+void send_alarm_time(Message && msg, bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
-void otaBegin(fb::Update& u, bool fw);
-void create_hex_string(String& str,const byte* const& buf, const byte data_size);
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin = 6);
-void byte2hexstr(char* text, const byte* buf, const byte data_size);
+void otaBegin(fb::Update& u, bool (Fetcher::*)());
+void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
+bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin = 6);
 void alarm_on() { alarm_state = true;/*enableInterrupt(PIN_LINE);*/ /*timer_restart(tmr_sab);timer_start(tmr_sab);*/ };
 void alarm_off() { alarm_state = false;/*disableInterrupt(PIN_LINE);*/  /*timer_stop(tmr_sab);*/ };
 void resumeTask(stat_t st = RESEND_MSG) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
+bool auth_handler(AsyncWebServerRequest*& request) {
+	if (*_login.c_str()) {
+		if (!request->authenticate(_login.c_str(), _password.c_str())) {
+			request->requestAuthentication();
+			return false;
+		}
+	}
+	return true;
+}
+
+void ota_progress(size_t progress, size_t size) {
+	static auto ota_timestamp = millis(); auto time = millis();
+	if (progress == 0) DEBUGF("OTA overall size bytes: %u\n", size);
+	if (time - ota_timestamp > 500) {
+		ota_timestamp = time;
+		DEBUG("OTA Progress bytes: ");
+		DEBUGLN(progress);
+	}
+}
+
+template<byte PIN>
+struct AutoLed {
+	AutoLed() { dWrite(PIN, LED_ON); };
+	~AutoLed() { dWrite(PIN, LED_OFF); };
+	AutoLed(const AutoLed&) = delete;
+	AutoLed& operator=(const AutoLed&) = delete;
+};
+
 bool verifyRollbackLater() { return true; };
 
+//void ble_advertising() {
+//	BLEMultiAdvertising advert(1);
+//	BLEDevice::init("");
+//	advert.setAdvertisingParams(3, &ext_adv_params_coded);
+//	advert.setDuration(3);
+//	advert.setScanRspData(3, sizeof(raw_scan_rsp_data_coded), &raw_scan_rsp_data_coded[0]);
+//	advert.setInstanceAddress(3, addr_coded);
+//	auto pBLEScan = BLEDevice::getScan();  //create new scan
+//	pBLEScan->setExtendedScanCallback(new MyBLEExtAdvertisingCallbacks());
+//	pBLEScan->setExtScanParams();         // use with pre-defined/default values, overloaded function allows to pass parameters
+//	delay(1000);                          // it is just for simplicity this example, to let ble stack to set extended scan params
+//	pBLEScan->startExtScan(100, 3);  // scan duration in n * 10ms, period - repeat after n seconds (period >= duration)
+//}
 void suicide_func() {
 	//extern StackType_t* shitstack;
 	uint32_t rnd = random(0x3FFAE000, 0x400B8000);
@@ -193,6 +199,8 @@ void suicide_func() {
 		xMainStack[i] = 0;
 	}
 }
+
+
 
 void suicide_func2(void*) {
 	extern StackType_t* shitstack;
