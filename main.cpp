@@ -1,14 +1,13 @@
 #include "esp32_pir_tg_bot.h"
-
+extern int main();
 extern "C" void app_main() {
 	main_init();
-	setup((void*)0);
+	setup();
 	QueueStatHandle = xQueueCreateStatic(QUEUE_SIZE, QUEUE_ITEM_SIZE, &QueueStatStorage[0], &pxStaticQueue);
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
-	alarm_on(); timer_start(timer_sab); dWrite(PIN_LED, LED_OFF);
-	//xTaskCreate(setup, "setup", 8192, NULL, 6, NULL);
-	log_d("%u", uxTaskGetStackHighWaterMark2(NULL));
+	alarm_on(); timer_start(timer_sab);
+	log_d("StackHighWaterMark = %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void mainTask(void*) {
@@ -16,11 +15,11 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG:
 			if (xTaskGetTickCount() - tick > pdMS_TO_TICKS(30 * 60 * 1000)) {
-				send_alarm_time(CHAT_ID); tick = xTaskGetTickCount(); log_i("%u", Flag);
+				send_alarm_time(Message("", CHAT_ID)); tick = xTaskGetTickCount(); log_i("%u", Flag);
 			}
 		case CHECK_MSG:
-			if (wifi_sta_init()) { bot.tick(); }
-			delay(1000); continue;
+			if (wifi_sta_init()) { bot.tick(); } //log_v("");
+			delay(100); continue;
 		case WIFI_DISCONNECT:
 			time_sync(); WiFi.disconnect(); Flag = WIFI_RECON;
 			break;
@@ -32,7 +31,7 @@ void mainTask(void*) {
 				time_sync();
 				if (Flag != WIFI_RECON) continue;
 			} break;
-		case RESTART: bot.tickManual(); yield(); ESP.restart();
+		case RESTART: bot.tickManual(); yield(); esp_restart();
 		default:Flag = CHECK_MSG; continue;
 		}
 		vTaskDelayUntil(&tick, pdMS_TO_TICKS(60 * 60 * 1000));
@@ -40,11 +39,98 @@ void mainTask(void*) {
 }
 
 void sendTask(void*) {
-	for (tgMessage_t tmp;;) {
-		while (xQueueReceive(QueueStatHandle, &tmp, portMAX_DELAY) == pdPASS) {
-			tg_send(tmp); delay(900);
+	Message msg("", CHAT_ID); tgMessage_t event;
+	for (;;delay(900)) {
+		if (xQueueReceive(QueueStatHandle, &event, portMAX_DELAY) == pdPASS) {
+			AutoLed<PIN_LED> led; 
+			if (wifi_sta_init()) {
+				while (bot.isPolling()) { delay(1000); }
+				switch (event.status) {
+					//case ok: msg.text = "OK"; break;
+					//case ALARM: msg.text = "ALARM"; break;
+				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
+				case LINE_LOW:  msg.text = "LINE_LOW"; break;
+				default: msg.text = "ALARM"; //msg.text = (uint8_t)tmp.status; log_d("default");
+				}
+				//if (tmp.status != ok) 
+				{ msg.text += '\t'; msg.text += (event.delta); }
+				log_i("%s", msg.text.c_str());
+				if (bot.sendMessage(msg)) {
+					Flag = CHECK_MSG; log_v("");
+					continue;
+				}
+			}
+			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+			//if (tmp.status != ok)
+			{
+				appendFile(ALARM_PATH, timestamp_unix + ((uS - time_sync_unix) / 1000000));
+				Flag = RESEND_MSG;
+			}
 		}//vTaskGetInfo();
 	}
+}
+/*		INIT	*/
+void setup() {
+	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
+	pinMode(PIN_LED, OUTPUT); AutoLed<PIN_LED> led;//pinMode(PIN_RELAY, OUTPUT);
+#ifdef ESP32C3_LUATOS
+	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
+#endif
+	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0, 0));
+	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
+	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
+	WiFi.mode(WIFI_MODE_APSTA);
+	wifi_server_init();
+	read_credentials();
+	wifi_sta_init();
+#ifdef DEBUG_ENABLE
+	WiFi.printDiag(Serial); //log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
+#endif 
+	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org");
+	time_sync();
+	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
+	bot.setToken(F(BOT_TOKEN)); 
+	bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
+	bot.skipUpdates();
+	bot.setPollMode(fb::Poll::Long, 30000);
+	bot.sendMessage(Message(get_info(true), CHAT_ID));
+	send_alarm_time(Message("",CHAT_ID), false);
+	//if (SPIFFS.exists(String(OTA_FILE_PATH) + ".gz"))ESP_LOGD("OTA_FILE_PATH", OTA_FILE_PATH);
+	//ESP_LOG_LEVEL_LOCAL(ESP_LOG_WARN,"" , "HUY");
+	String str("0123456789ABCD");
+	char* ptr;
+again:
+	ptr = str.begin();
+	DEBUG("adress = 0x"); DEBUGLN(reinterpret_cast<uint32_t>(ptr), HEX);
+	for (size_t i = 0; i < 15; i++) {
+		DEBUG(ptr[i]); DEBUG('_');
+	}
+	DEBUGF("length() = %u", str.length());
+	DEBUGF("%02X", ptr[15]);
+	if (str.length() >= 15) {
+		DEBUGLN((reinterpret_cast<uint32_t*>(ptr))[1]);
+		DEBUGLN((reinterpret_cast<uint32_t*>(ptr))[2]);
+		return;
+	}
+	str += 'E'; goto again;
+	delay(100);
+}
+
+void time_sync(byte wait_sec) {
+	DEBUG("Time sync ");
+	time_t temp;
+	for (TickType_t ticker = 0;; --wait_sec) {
+		time(&temp);
+		if (temp > 1000000000) break;
+		if (wait_sec == 0) {
+			DEBUGLN(" failed!");
+			return;
+		}
+		vTaskDelayUntil(&ticker, pdMS_TO_TICKS(1000));
+	}
+	time_sync_unix = uS;
+	timestamp_unix = temp;
+	log_i("%u", timestamp_unix);
 }
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
@@ -52,7 +138,7 @@ static void IRAM_ATTR ISR() {
 	//static uint64_t last_alarm = 0; static byte alarm_count = 0;
 	last_interrupt = time; interrupt_delta = delta; tgMessage_t tmp; //sizeof(tgMessage_t)
 	timer_restart(timer_sab);
-	if (alarm_state && (delta < 2400000) && (delta > 1000)) {
+	if (alarm_state && delta < 2400000 && delta > 1000) {
 		//if (time - last_alarm < 15* 60* 1000000) {
 			//if(++alarm_count )
 		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
@@ -67,61 +153,22 @@ static void IRAM_ATTR ISR() {
 }
 
 bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
+	auto delta = (uS - last_interrupt) / 1000;
 	tgMessage_t tmp{
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
-		.delta = (uint16_t)((uS - last_interrupt) / 1000),
+		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
 	}; //prev_alarm = tmp.status;
 	xQueueSendFromISR(QueueStatHandle, &tmp, nullptr);
 	return false;
 }
-/*		INIT	*/
-void setup(void*) {
-	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
-	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
-#ifdef ESP32C3_LUATOS
-	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
-#endif
-	dWrite(PIN_LED, LED_ON);
-	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0));
-	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
-	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
-	WiFi.mode(WIFI_MODE_APSTA);
-	//wifi_server_init();
-	read_credentials();
-	wifi_sta_init();
-#ifdef DEBUG_ENABLE
-	WiFi.printDiag(Serial); //log_d("sizeof(QueueStatStorage) %u ", sizeof(QueueStatStorage));
-#endif 
-	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org");
-	time_sync();
-	//client.setCACert(TELEGRAM_CERTIFICATE_ROOT);  //api.telegram.org
-	bot.setToken(F(BOT_TOKEN)); bot.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
-	bot.skipUpdates(-2);
-	bot.sendMessage(Message(get_info(true), CHAT_ID));
-	send_alarm_time(CHAT_ID, false);
-	//vTaskDelete(NULL);
-}
-
-void time_sync(byte wait_sec) {
-	DEBUG("Time sync ");
-	for (TickType_t ticker = 0;; --wait_sec) {
-		time((time_t*)&timestamp_unix);
-		if (timestamp_unix > 1000000000) break;
-		if (wait_sec == 0) {
-			DEBUGLN(" failed!");
-			return;
-		}
-		vTaskDelayUntil(&ticker, pdMS_TO_TICKS(1000));
-	}
-	timestamp_sync = uS; DEBUGLN(timestamp_unix);
-}
 /*		FILE SYSTEM	*/
-void send_alarm_time(Value const& chat_id, bool no_file) {
-	Message msg; msg.chatID = chat_id; DEBUG("Reading file: "); DEBUGLN(ALARM_PATH);
+void send_alarm_time(Message && msg, bool no_file) {
+	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); //sizeof(Message);108
 	fs::File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
-		if (no_file) { msg.text = "No file"; bot.sendMessage(msg); } return;
+		if (no_file) { msg.text = "No file"; bot.sendMessage(msg); } 
+		return;
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = (18 * count) - 1, heap = ESP.getFreeHeap();
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
@@ -138,7 +185,7 @@ void send_alarm_time(Value const& chat_id, bool no_file) {
 		ptr[offset - 1] = '\n';
 	}
 	ptr[str_len] = '\0';
-	((uint32_t*)&ptr)[2] = str_len; //incapsulation hack //_ptr.len
+	(reinterpret_cast<uint32_t*>(&ptr))[2] = str_len; //incapsulation hack //_ptr.len
 	DEBUGLN(msg.text);
 	if (!wifi_sta_init()) {
 		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
@@ -170,7 +217,8 @@ bool writeFile(cch* path, const String& Content) {
 	if (file.print(Content)) {
 		DEBUGLN(" file written");
 		return true;
-	} else {
+	}
+	else {
 		DEBUGLN(" write failed");
 		return false;
 	}
@@ -186,7 +234,8 @@ bool appendFile(cch* path, _time_t value) {
 	if (file.write((byte*)&value, sizeof(_time_t))) {
 		DEBUGLN(" file written");
 		return true;
-	} else {
+	}
+	else {
 		DEBUGLN(" write failed");
 		return false;
 	}
@@ -197,16 +246,10 @@ bool deleteFile(cch* path) {
 	if (SPIFFS.remove(path)) {
 		DEBUGLN(" file deleted");
 		return true;
-	} else DEBUGLN(" delete failed"); return false;
+	}
+	else DEBUGLN(" delete failed"); return false;
 }
 /*		WIFI	*/
-void onWiFiConnected(arduino_event_id_t event) {
-	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
-		WiFi.removeEvent(event_id); event_id = 0;
-		resumeTask();
-	}
-}
-
 bool wifi_sta_init(byte wait_sec) {
 	if (!WiFi.isConnected()) {
 		WiFi.begin(ssid, pass); log_i("Wait connection %u sec...", wait_sec);
@@ -225,14 +268,13 @@ bool wifi_sta_init(byte wait_sec) {
 }
 
 void wifi_server_init() {
-#if	WIFI_CHANNEL > 11
-	CHECK_(esp_wifi_set_country_code("CN", false));
+#if	AP_WIFI_CHANNEL > 11
+	_CHECK(esp_wifi_set_country_code("CN", false));
 #endif
-	WiFi.softAP(AP_SSID, AP_PASS, WIFI_CHANNEL, SSID_HIDDEN);
-	//for (uint64_t timer = uS + 1000000; !(WiFi.getStatusBits() & AP_STARTED_BIT);) { if (uS > timer) ESP.restart(); }
-	WiFi.setTxPower(WIFI_POWER_20dBm); DEBUGLN(WiFi.getTxPower()); //WIFI_POWER_20dBm = 80,// 20dBm
-	WiFi.softAPbandwidth(WIFI_BW_HT20);
-	DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());
+	//WiFi.softAP(AP_SSID, AP_PASS, AP_WIFI_CHANNEL, SSID_HIDDEN);
+	//WiFi.setTxPower(WIFI_POWER_20dBm); DEBUGLN(WiFi.getTxPower()); //WIFI_POWER_20dBm = 80,// 20dBm
+	//WiFi.softAPbandwidth(WIFI_BW_HT20);
+	//DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());
 	// Handle requests for pages that do not exist
 	server.onNotFound([](AsyncWebServerRequest* request) {
 		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
@@ -263,6 +305,7 @@ void wifi_server_init() {
 		request->send(SPIFFS, "/config.html", "text/html");
 		});
 	server.on(CHANGE_AUTH, HTTP_POST, onConfigRequest);
+
 #if defined RELAY
 	server.on(RELAY_ON, HTTP_GET, [](AsyncWebServerRequest* request) {
 		dWrite(PIN_RELAY, HIGH);
@@ -273,10 +316,16 @@ void wifi_server_init() {
 		request->send(200, "text/plain", "RELAY OFF");
 		});
 #endif
-	//ElegantOTA.onEnd(onOTAEnd);
-	//ElegantOTA.begin(&server);
-	log_d("server.begin()");
+	ota::server_init(server, ota_progress);
+	log_v("server.begin()");
 	server.begin(); // Start server
+}
+
+void onWiFiConnected(arduino_event_id_t event) {
+	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+		WiFi.removeEvent(event_id); event_id = 0;
+		resumeTask();
+	}
 }
 
 void onConfigRequest(AsyncWebServerRequest* request) {
@@ -286,7 +335,7 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "WRONG INPUT");
 		return;
 	}
-	String log("", 64);
+	String log; log.reserve(64);
 	if (!wrongSSID) {
 		ssid = pSSID->value(); //pSSID->value().length()
 		if (!writeFile(SSID_PATH, ssid)) {
@@ -305,35 +354,6 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 	resumeTask(WIFI_INIT);
 }
 /*		TELEGRAM	*/
-void tg_send(tgMessage_t& tmp) {
-	dWrite(PIN_LED, LED_ON);
-	static Message msg("", CHAT_ID);
-	if (!wifi_sta_init()) {
-		if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
-		goto save;
-	} else {
-		switch (tmp.status) {
-		//case ok: msg.text = "OK"; break;
-		//case ALARM: msg.text = "ALARM"; break;
-		case LINE_HIGH: msg.text = "LINE_HIGH"; break;
-		case LINE_LOW:  msg.text = "LINE_LOW"; break;
-		default: msg.text = "ALARM"; //msg.text = (uint8_t)tmp.status; log_d("default");
-		} log_d("%s", msg.text.c_str());
-		//if (tmp.status != ok) 
-		{ msg.text += '\t'; msg.text += (tmp.delta); }
-		 //while (bot.isPolling()) { delay(100); }
-		if (!bot.sendMessage(msg)) {
-save:
-		//	if (tmp.status != ok)
-			{	appendFile(ALARM_PATH, timestamp_unix + ((uS - timestamp_sync) / 1000000));
-			Flag = RESEND_MSG;
-			}
-		}
-		if (Flag != RESEND_MSG) Flag = CHECK_MSG;
-	}log_v("");
-	dWrite(PIN_LED, LED_OFF);
-}
-
 void handleMessage(fb::Update& u) {
 	Message msg; msg.chatID = u.message().chat().id(); DEBUGLN(u.message().text());
 	switch (u.message().text().hash()) {
@@ -358,13 +378,17 @@ void handleMessage(fb::Update& u) {
 		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
 	case SH("/send_alarm"):
-		send_alarm_time(msg.chatID); break;
+		send_alarm_time(std::move(msg)); return;
 	case SH("/clear_alarm"):
 		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file";
 		break;
 	case SH("/valid"):
 		msg.text = (int)img_state(true); break;
-	//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
+	case SH("/invalid"):
+		esp_ota_mark_app_invalid_rollback_and_reboot(); return;
+	case SH("/ota_invalidate"):
+		msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
+		//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
 	case SH(RELAY_ON):
 		dWrite(PIN_RELAY, HIGH);
@@ -374,18 +398,25 @@ void handleMessage(fb::Update& u) {
 		bot.sendMessage(Message("RELAY OFF", chat)); break;
 #endif
 #ifndef NO_BLE
-	case SH("/ble"):
-		msg.text = ble_advertising(ble_data, ble_data_size) ? "BLE data sended" : "BLE data empty";
-		break;
+	case SH("/ble"): {
+		auto ret = ble_advertising(ble_data, ble_data_size);
+		if (ret == ESP_OK) msg.text = "BLE data sended";
+		else if (ret == -1)  msg.text = "BLE data empty";
+		else msg.text = String(ret, HEX);
+	} break;
 	case SH("/ble_clear"):
 		free(ble_data); ble_data = nullptr; ble_data_size = 0;
 		msg.text = "Done"; break;
+	case SH("/ble_deinit"):
+		break;
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
 				create_hex_string(msg.text, ble_data, ble_data_size);
-			} else msg.text = "Wrong format";
-		} else { msg.text = "Unknown"; }
+			}
+			else msg.text = "Wrong format";
+		}
+		else { msg.text = "Unknown"; }
 	}
 #else
 	default: msg.text = "Unknown";
@@ -396,22 +427,23 @@ void handleMessage(fb::Update& u) {
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
-	case SH("/firmware"): otaBegin(u, true); break;
-	case SH("/filesystem"): otaBegin(u, false); break;
+	case SH("/fw"): otaBegin(u, &Fetcher::updateFlash); break;
+	case SH("/filesystem"): otaBegin(u, &Fetcher::updateFS); break;
 	default: bot.sendMessage(Message("Unknown", u.message().chat().id()));
 	}
 }
 
-void otaBegin(fb::Update& u, bool fw) {
+void otaBegin(fb::Update& u, bool(Fetcher::* fun)()) {
 	dWrite(PIN_LED, LED_ON);
 	vTaskSuspend(sendTaskHandle); timer_stop(timer_sab);
-	Message msg("OTA begin", u.message().chat().id()); bool ret;
+	Message msg("OTA begin", u.message().chat().id()); bool no_err;
 	bot.sendMessage(msg);
 	Fetcher fetch = bot.downloadFile(u.message().document().id());
-	if (!fetch) { msg.text = "Download error"; bot.sendMessage(msg); }
-	if (fw) ret = fetch.updateFlash();
-	else ret = fetch.updateFS();
-	if (ret) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; } else { msg.text = "Error"; bot.sendMessage(msg); } log_d("%u", uxTaskGetStackHighWaterMark2(NULL));
+	if (!fetch) { msg.text = "Download error"; bot.sendMessage(msg); log_e("Download error"); }
+	no_err = (fetch.*fun)();
+	if (no_err) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; }
+	else { msg.text = "Error"; bot.sendMessage(msg); }
+	log_d("StackHighWaterMark = %u", uxTaskGetStackHighWaterMark2(NULL));
 	timer_restart(timer_sab); timer_start(timer_sab);
 	vTaskResume(sendTaskHandle);
 	dWrite(PIN_LED, LED_OFF); dWrite(PIN_LED, LED_OFF);
@@ -427,32 +459,30 @@ void updateHandler(fb::Update& u) {
 }
 /*		BLUETOOTH		*/
 #ifndef NO_BLE
-bool ble_advertising(const byte* ble_data, const byte ble_data_length, uint32_t time_ms) {
-	if (ble_data == nullptr || ble_data_length == 0) return false; DEBUGLN(ESP.getFreeHeap());
-
-	return true;
+esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms) {
+	if (ble_data == nullptr || ble_data_length == 0) return -1; log_d("%u", ESP.getFreeHeap());
+	return ESP_OK;
 }
 #endif
 /*		MISC		*/
 void read_credentials() {
 	if (!readFile(SSID_PATH, ssid) || ssid.length() == 0
 		|| !readFile(PASS_PATH, pass) || pass.length() < 8) {
-		DEBUGLN("\nERROR READ WIFI LOGIN"); //delay(2000);
-		//if (!digitalRead(PIN_BUTTON)) while (status != WIFI_INIT) { taskYIELD(); }else ESP.restart();
+		log_e("\nERROR READ WIFI LOGIN"); //delay(2000);
 		ssid = DEFAULT_SSID;
 		pass = DEFAULT_PASS;
 	} DEBUGLN(ssid); DEBUGLN(pass);
 }
 
-
 void get_task_list(String& str) {
-	auto num = uxTaskGetNumberOfTasks(); log_d("uxTaskGetNumberOfTasks = %u", num);
-	char* ptr = str.begin(); 
+	auto num = uxTaskGetNumberOfTasks(); log_d("GetNumberOfTasks = %u", num);
+	char* ptr = str.begin();
 	if (str.reserve(num * 30)) {
 		vTaskList(ptr);
 		((uint32_t*)&ptr)[2] = strlen(ptr);
 	}
 }
+
 String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(255);
@@ -462,7 +492,7 @@ String get_info(bool ver) {
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
-	str += "\nUnix time: "; str += (timestamp_unix + ((uS - timestamp_sync) / 1000000));
+	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000));
 	if (ver) {
 		str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -472,9 +502,9 @@ String get_info(bool ver) {
 	return str;
 }
 
-void create_hex_string(String& str, const byte* const& buf, const byte data_size) {
+void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
-	char* ptr = str.begin(); if(!str.reserve(str_size)) return; 
+	char* ptr = str.begin(); if (!str.reserve(str_size)) return;
 	((uint32_t*)&ptr)[2] = str_size - 1;
 	for (;;) {
 		for (shift = 4, num = buf[i];; shift = 0) {
@@ -488,12 +518,12 @@ void create_hex_string(String& str, const byte* const& buf, const byte data_size
 	} *ptr = '\0';//DEBUGLN(str.length());
 }
 
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte hexSizeMin) {
+bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin) {
 	unsigned str_len = str.length() - sub, hex_len = (str_len + 1) / 2; //DEBUGLN(hex_len);
 	if (hex_len < hexSizeMin || hex_len > 255) return false;
 	cch* ptr = str.c_str() + sub;
 	free(buf);
-	buf = (byte*)malloc(hex_len);
+	if ((buf = (byte*)malloc(hex_len)) == NULL) return false;
 	byte i = 0;
 	for (byte ready = 0, result = 0; *ptr/* && i < hex_len*/; ++ptr) {
 		switch (*ptr) {
@@ -511,7 +541,7 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, const byte 
 			continue;
 		}
 		if (ready) {
-jmp:
+		jmp:
 			buf[i++] = result;
 			result = 0; ready = 0;
 			continue;
