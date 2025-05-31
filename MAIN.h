@@ -34,8 +34,9 @@ bool btInUse() { return false; }
 #endif
 //#define DEBUG_ENABLE
 #ifdef DEBUG_ENABLE
-#define DEBUG(x) Serial.print(x)
-#define DEBUGLN(x) Serial.println(x)
+#pragma message "DEBUG_ENABLE"
+#define DEBUG(x, ...) Serial.print(x, ##__VA_ARGS__)
+#define DEBUGLN(x, ...) Serial.println(x, ##__VA_ARGS__)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
 #define _CHECK(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
 #else
@@ -61,7 +62,8 @@ void nvs_init() {
 			err = esp_partition_erase_range(partition, 0, partition->size);
 			if (err != ESP_OK) err = nvs_flash_init();
 			else log_e("Failed to format the broken NVS partition!");
-		} else log_e("Could not find NVS partition");
+		}
+		else log_e("Could not find NVS partition");
 	}
 	if (err) log_e("Failed to initialize NVS! Error: %u", err);
 }
@@ -111,7 +113,9 @@ void main_init() {
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
 #if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
 	if (!btInUse())
-	{ auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret); }
+	{
+		auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret);
+	}
 #endif
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 	//if (!verifyRollbackLater()) { log_i("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
