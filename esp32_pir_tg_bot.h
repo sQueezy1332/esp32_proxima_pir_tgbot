@@ -51,9 +51,9 @@
 #endif
 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
-#define SEND_TASK_STACK_SIZE (4 * 1024)
-#define QUEUE_ITEM_SIZE (sizeof(tgMessage_t))
-#define QUEUE_SIZE (32 * QUEUE_ITEM_SIZE)
+#define SEND_TASK_STACK_SIZE (8 * 1024)
+#define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
+#define QUEUE_LEN 32
 
 #define lineRead gio::read(PIN_LINE)
 #define dWrite(pin, val) gio::write(pin, val)
@@ -85,17 +85,19 @@ typedef enum : uint8_t {
 typedef struct /*__attribute__((packed))*/ {
 	stat_t status;
 	uint16_t delta;
-} tgMessage_t;
+} tgMsg_t;
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
-TaskHandle_t loopTaskHandle, sendTaskHandle;
-QueueHandle_t QueueStatHandle;
+TaskHandle_t loopTaskHandle, sendTaskHandle;	//task
+uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticQueue_t pxStaticQueue;
-uint8_t QueueStatStorage[QUEUE_SIZE];
+QueueHandle_t QueueMsgHandle;	//queue
+//StaticSemaphore_t xMutexBuffer;
+//SemaphoreHandle_t mutex; // mutex
 
 //static volatile stat_t prev_alarm = ok;
-static stat_t Flag = ok;
+stat_t Flag = ok;
 bool alarm_state = false;
 volatile uint64_t last_interrupt = 0;
 volatile uint32_t interrupt_delta = 0;
@@ -105,7 +107,8 @@ network_event_handle_t event_id = 0;
 gptimer_handle_t timer_sab = nullptr;
 String ssid, pass, _login, _password;
 AsyncWebServer server(80);
-FastBot2 bot;
+FastBot2 bot(BOT_TOKEN);
+FastBot2 bot_upd(BOT_TOKEN);
 #ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
@@ -137,7 +140,7 @@ void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin = 6);
 void alarm_on() { alarm_state = true;/*enableInterrupt(PIN_LINE);*/ /*timer_restart(tmr_sab);timer_start(tmr_sab);*/ };
 void alarm_off() { alarm_state = false;/*disableInterrupt(PIN_LINE);*/  /*timer_stop(tmr_sab);*/ };
-void resumeTask(stat_t st = RESEND_MSG) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
+void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
 		if (!request->authenticate(_login.c_str(), _password.c_str())) {
