@@ -138,8 +138,8 @@ void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin = 6);
-void alarm_on() { alarm_state = true;/*enableInterrupt(PIN_LINE);*/ /*timer_restart(tmr_sab);timer_start(tmr_sab);*/ };
-void alarm_off() { alarm_state = false;/*disableInterrupt(PIN_LINE);*/  /*timer_stop(tmr_sab);*/ };
+void alarm_on() { alarm_state = true;enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_off() { alarm_state = false;disableInterrupt(PIN_LINE);  timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
