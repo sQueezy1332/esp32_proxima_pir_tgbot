@@ -26,9 +26,8 @@ void mainTask(void*) {
 		case WIFI_INIT:
 			WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
 		case RESTART: bot.tickManual(); yield(); esp_restart();
-		default:Flag = CHECK_MSG; continue;
+		default:Flag = CHECK_MSG;
 		}
-		//
 	}
 }
 
@@ -184,7 +183,7 @@ try_send: DEBUGLN(text);
 		}
 	}
 	else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-	
+
 }
 
 bool readFile(cch* path, String& Content) {
@@ -417,20 +416,21 @@ void handleDocument(fb::Update& u) {
 	}
 }
 
-void otaBegin(fb::Update& u, bool(Fetcher::* fun)()) {
-	dWrite(PIN_LED, LED_ON);
-	vTaskSuspend(sendTaskHandle); timer_stop(timer_sab);
-	Message msg("OTA begin", u.message().chat().id()); bool no_err;
-	bot.sendMessage(msg);
-	Fetcher fetch = bot.downloadFile(u.message().document().id());
-	if (!fetch) { msg.text = "Download error"; bot.sendMessage(msg); log_e("Download error"); }
-	no_err = (fetch.*fun)();
-	if (no_err) { msg.text = "Success"; bot.sendMessage(msg); Flag = RESTART; return; }
-	else { msg.text = "Error"; bot.sendMessage(msg); }
-	log_d("StackHighWaterMark = %u", uxTaskGetStackHighWaterMark2(NULL));
-	timer_restart(timer_sab); timer_start(timer_sab);
-	vTaskResume(sendTaskHandle);
-	dWrite(PIN_LED, LED_OFF); dWrite(PIN_LED, LED_OFF);
+void otaBegin(fb::Update& u, bool(Fetcher::* upd)()) {
+	AutoLed<PIN_LED> led; alarm_off();
+	vTaskSuspend(sendTaskHandle);
+	Message msg("OTA begin", u.message().chat().id());
+	bot_upd.sendMessage(msg);
+	Fetcher fetch = bot_upd.downloadFile(u.message().document().id());
+	if (fetch) {
+		if ((fetch.*upd)()) { msg.text = "Success"; Flag = RESTART; }
+		else { msg.text = "Error"; } 
+	}
+	else { msg.text = "Download error"; }
+	log_i("%s", msg.text.c_str());
+	bot_upd.sendMessage(msg);
+	alarm_on();
+	vTaskResume(sendTaskHandle); log_d("StackHighWaterMark = %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void updateHandler(fb::Update& u) {
