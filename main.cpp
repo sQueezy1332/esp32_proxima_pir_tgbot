@@ -2,11 +2,11 @@
 
 extern "C" void app_main() {
 	main_init();
-	setup();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
+	setup();
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
-	alarm_on(); timer_start(timer_sab);
+	alarm_on(); //timer_start(timer_sab);
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
@@ -69,7 +69,7 @@ void setup() {
 #ifdef ESP32C3_LUATOS
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
-	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0, 0));
+	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 1, 0));
 	attachInterrupt(PIN_LINE, &ISR, FALLING);// gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
@@ -424,7 +424,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* upd)()) {
 	Fetcher fetch = bot_upd.downloadFile(u.message().document().id());
 	if (fetch) {
 		if ((fetch.*upd)()) { msg.text = "Success"; Flag = RESTART; }
-		else { msg.text = "Error"; } 
+		else { msg.text = "Error"; }
 	}
 	else { msg.text = "Download error"; }
 	log_i("%s", msg.text.c_str());
