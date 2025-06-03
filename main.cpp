@@ -25,7 +25,7 @@ void mainTask(void*) {
 			if (wifi_sta_init()) { bot.tickManual(); } continue;
 		case WIFI_INIT:
 			WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
-		case RESTART: bot.tickManual(); yield(); esp_restart();
+		case RESTART: bot_upd.tickManual(); yield(); esp_restart();
 		default:Flag = CHECK_MSG;
 		}
 	}
@@ -79,31 +79,14 @@ void setup() {
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
 #endif 
-	configTime(3 * 3600, 0, "ru.pool.ntp.org", "pool.ntp.org");
+	setenv("TZ", "MSK-3", 1); tzset();
 	time_sync();
-	bot_upd.attachUpdate(updateHandler); //bot.setPollMode(Poll::Long, 20000);
-	bot_upd.skipUpdates();
+	bot_upd.attachUpdate(updateHandler);
+	bot_upd.skipUpdates(-2);
 	bot_upd.setPollMode(fb::Poll::Long, 30000);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	send_alarm_time(Message("", CHAT_ID), false);
 	//ESP_LOG_LEVEL_LOCAL(ESP_LOG_WARN,"" , "HUY");
-	{String str("0123456789ABCD");
-	char* ptr;
-again:
-	ptr = str.begin();
-	DEBUG("adress = 0x"); DEBUGLN(reinterpret_cast<uint32_t>(ptr), HEX);
-	for (size_t i = 0; i < 15; i++) {
-		DEBUG(ptr[i]); DEBUG('_');
-	}
-	DEBUGF("length() = %u", str.length());
-	DEBUGF("%02X", ptr[15]);
-	if (str.length() >= 15) {
-		DEBUGLN(reinterpret_cast<uint32_t*>(ptr)[1]);
-		DEBUGLN(reinterpret_cast<uint32_t*>(ptr)[2]);
-		return;
-	}
-	str += 'E'; goto again;
-	delay(100); }
 }
 
 void time_sync(byte wait_sec) {
@@ -153,19 +136,20 @@ bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_da
 /*		FILE SYSTEM	*/
 void send_alarm_time(Message&& msg, bool no_file) {
 	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); //sizeof(Message);108
-	String& text = msg.text; fs::File file = SPIFFS.open(ALARM_PATH, FILE_READ);
+	String& str = msg.text; auto file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
-		if (no_file) { text = "No file"; bot.sendMessage(msg); }
+		if (no_file) { str = "No file"; bot.sendMessage(msg); }
 		return;
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = 18 * count, heap = ESP.getFreeHeap();
-	char* ptr; time_t timestamp = 0; struct tm timeinfo;
+	char* ptr; time_t timestamp = 0; struct tm timeinfo {0};
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
-	if (!text.reserve(str_len) /*|| heap - 5000 < str_len*/) {
-		text += "file_size \n"; text += file_size; text += "count \n"; text += count; text += "str_len \n"; text += str_len; text += "HEAP \n"; text += heap;
+	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
+		str += "file_size \n"; str += file_size; str += "count \n";
+		str += count; str += "str_len \n"; str += str_len; str += "HEAP \n"; str += heap;
 		goto try_send;
-	}ptr = text.begin();
+	}ptr = str.begin();
 	for (size_t offset = 0; offset < str_len, file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
 		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
@@ -174,8 +158,8 @@ void send_alarm_time(Message&& msg, bool no_file) {
 		ptr[offset - 1] = '\n';
 	}
 	ptr[str_len - 1] = '\0';
-	reinterpret_cast<uint32_t*>(ptr)[2] = str_len; //incapsulation hack //_ptr.len
-try_send: DEBUGLN(text);
+	reinterpret_cast<uint32_t*>(&str)[2] = str_len; //incapsulation hack //_ptr.len
+try_send: DEBUGLN(str); DEBUGLN();
 	if (wifi_sta_init()) {
 		Flag = CHECK_MSG;
 		if (bot.sendMessage(msg)) {
@@ -360,6 +344,10 @@ void handleMessage(fb::Update& u) {
 	case SH("/restart"):
 		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
+	case SH("/sync_unix"): {
+		time_sync_unix = uS;
+		msg.text = u[tg_apih::date];
+		timestamp_unix = msg.text.toInt(); }break;
 	case SH("/send_alarm"):
 		send_alarm_time(std::move(msg)); return;
 	case SH("/clear_alarm"):
@@ -405,7 +393,7 @@ void handleMessage(fb::Update& u) {
 	default: msg.text = "Unknown";
 #endif 
 	}DEBUGLN(msg.text);
-	reinterpret_cast<FastBot2*>(fb::thisBot)->sendMessage(msg);
+	bot_upd.sendMessage(msg);
 }
 
 void handleDocument(fb::Update& u) {
@@ -419,11 +407,14 @@ void handleDocument(fb::Update& u) {
 void otaBegin(fb::Update& u, bool(Fetcher::* upd)()) {
 	AutoLed<PIN_LED> led; alarm_off();
 	vTaskSuspend(sendTaskHandle);
-	Message msg("OTA begin", u.message().chat().id());
+	//uint32_t ptr = (uint32_t)(this); int offset = (uint32_t)(&_partition) - thptr ; log_d("%d", offset); //56
+	auto ptr = esp_ota_get_next_update_partition(NULL);
+	Message msg("OTA begin\nPartition: ", u.message().chat().id());
+	msg.text += ptr->label; msg.text += "\nsize: "; msg.text += ptr->size;
 	bot_upd.sendMessage(msg);
 	Fetcher fetch = bot_upd.downloadFile(u.message().document().id());
 	if (fetch) {
-		if ((fetch.*upd)()) { msg.text = "Success"; Flag = RESTART; }
+		if ((fetch.*upd)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
 		else { msg.text = "Error"; }
 	}
 	else { msg.text = "Download error"; }
@@ -463,7 +454,7 @@ void get_task_list(String& str) {
 	if (str.reserve(num * 35)) {
 		char* const ptr = str.begin();
 		vTaskList(ptr);
-		reinterpret_cast<uint32_t*>(ptr)[2] = strlen(ptr);
+		reinterpret_cast<uint32_t*>(&str)[2] = strlen(ptr);
 	}
 }
 
@@ -476,7 +467,7 @@ String get_info(bool ver) {
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nlast_interrupt =  "; str += last_interrupt;
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
-	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000));
+	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
 		str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) {
@@ -489,49 +480,46 @@ String get_info(bool ver) {
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; char* ptr = str.begin();
-	reinterpret_cast<uint32_t*>(ptr)[2] = str_size - 1;
+	reinterpret_cast<uint32_t*>(&str)[2] = str_size - 1;
 	for (;;) {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
 			nibble < 10 ? *ptr = nibble ^ 0x30 : *ptr = nibble + ('A' - 10);
-			ptr++;
+			++ptr;
 			if (shift == 0) break;
 		}
-		if (++i >= data_size) break;
+		if (++i >= data_size) { *ptr = '\0'; break; }
 		*ptr++ = ' ';
-	} *ptr = '\0';//DEBUGLN(str.length());
+	} log_d("%u", str.length());
 }
 
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin) {
-	unsigned str_len = str.length() - sub, hex_len = (str_len + 1) / 2; //DEBUGLN(hex_len);
-	if (hex_len < hexSizeMin || hex_len > 255) return false;
-	cch* ptr = str.c_str() + sub;
-	free(buf);
-	if ((buf = (byte*)malloc(hex_len)) == NULL) return false;
-	byte i = 0;
-	for (byte ready = 0, result = 0; *ptr/* && i < hex_len*/; ++ptr) {
+bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
+	size_t str_len = str.length() - sub, hex_len = (str_len + 1) / 2; log_d("%u", hex_len);
+	if (hex_len < 6 || hex_len > 255) return false;
+	byte i = 0; cch* ptr = str.c_str() + sub;
+	free(buf); buf = (byte*)malloc(hex_len);
+	if (buf == NULL) return false;
+	for (byte ready = 0, result = 0; *ptr; ++ptr) {
 		switch (*ptr) {
 		case'0'... '9':
-			if (result & 0xf) result <<= 4;
 			result |= (*ptr ^ 0x30); break;
-		case 'a'...'f':
-			if (result & 0xf) result <<= 4;
-			result |= *ptr - 87; break;
 		case 'A'... 'F':
-			if (result & 0xf) result <<= 4;
 			result |= *ptr - 55; break;
+		case 'a'...'f':
+			result |= *ptr - 87; break;
 		default:
-			if (ready) goto jmp;
+			if (ready) goto rdy;
 			continue;
 		}
 		if (ready) {
-		jmp:
-			buf[i++] = result;
+		rdy:
+			buf[i] = result;
+			if (++i == hex_len) break;
 			result = 0; ready = 0;
 			continue;
 		}
+		if (result & 0xf) result <<= 4;
 		ready = 1;
 	}
-	realloc(buf, data_len = i);
-	return true;
+	return realloc(buf, (data_len = i));
 }
