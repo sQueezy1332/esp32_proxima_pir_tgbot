@@ -1,7 +1,7 @@
 #pragma once
 #pragma GCC diagnostic ignored "-fpermissive"
-#define _WANT_USE_LONG_TIME_T
 #define _USE_LONG_TIME_T
+#define _USE_32BIT_TIME_T
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include <MAIN.h>
@@ -137,7 +137,7 @@ void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len, byte hexSizeMin = 6);
+bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
 void alarm_on() { alarm_state = true;enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
 void alarm_off() { alarm_state = false;disableInterrupt(PIN_LINE);  timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
