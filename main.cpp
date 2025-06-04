@@ -14,11 +14,12 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG:
 			if (!send_alarm_time(Message("", CHAT_ID))) {
-				log_i("%u", Flag); delay(15 * 60 * 1000); 
-			} else Flag = CHECK_MSG; 
+				log_i("%u", Flag); delay(15 * 60 * 1000);
+			}
+			else Flag = CHECK_MSG;
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
-			delay(300); continue;
+			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300));; continue;
 		case WIFI_DISCONNECT:
 			time_sync(); WiFi.disconnect();
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(60 * 60 * 1000));
@@ -26,7 +27,7 @@ void mainTask(void*) {
 		case WIFI_INIT:
 			WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
 		case RESTART: bot_upd.tickManual(); yield(); esp_restart();
-		default:Flag = CHECK_MSG; sizeof(WiFiClientSecure);
+		default:Flag = CHECK_MSG;
 		}
 	}
 }
@@ -35,7 +36,7 @@ void sendTask(void*) {
 	Message msg("", CHAT_ID); tgMsg_t event; //sizeof(FastBot2);
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
-			AutoLed<PIN_LED> led; 
+			AutoLed<PIN_LED> led;
 			if (wifi_sta_init()) {
 				switch (event.status) {
 #ifdef DEBUG_ENABLE
@@ -48,15 +49,20 @@ void sendTask(void*) {
 				}
 				{ msg.text += '\t'; msg.text += (event.delta); }
 			OK:
-				log_i("%s", msg.text.c_str());
+				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
+				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
 					Flag = CHECK_MSG; log_v("");
-					vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 					continue;
 				}
+				else {
+					log_w("try again"); delay(2000);
+					if (bot.sendMessage(msg)) { tick = xTaskGetTickCount(); continue; }
+				}
+				log_d("%u", ESP.getFreeHeap());
 			}
 			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-			//if (tmp.status != ok)
+			if (event.status != ok)
 			{
 				appendFile(ALARM_PATH, timestamp_unix + ((uS - time_sync_unix) / 1000000));
 				Flag = RESEND_MSG;
@@ -72,7 +78,7 @@ void setup() {
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
 	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0));
-	attachInterrupt(PIN_LINE, &ISR, FALLING); alarm_on();
+	attachInterrupt(PIN_LINE, &ISR, FALLING);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
 	wifi_server_init();
@@ -81,37 +87,39 @@ void setup() {
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
 #endif 
-	setenv("TZ", "MSK-3", 1); tzset();
+	//setenv("TZ", "MSK-3", 1); tzset();
+	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov");
 	time_sync();
 	bot_upd.attachUpdate(updateHandler);
 	bot_upd.skipUpdates(-2);
 	bot_upd.setPollMode(fb::Poll::Long, 30000);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	send_alarm_time(Message("", CHAT_ID), false);
+	alarm_on();
 }
 
-void time_sync(byte wait_sec) {
+void time_sync(uint32_t wait_sec) {
 	DEBUG("Time sync "); if (!WiFi.isConnected()) return;
-	time_t temp = 0; uint32_t timer = wait_sec * 10;
-	for (;; --timer) {
+	time_t temp = 0; wait_sec *= 10;
+	for (;; --wait_sec) {
 		time(&temp);
 		if (temp > 1000000000) break;
-		if (timer == 0) {
+		if (wait_sec == 0) {
 			DEBUGLN(" failed!"); return;
 		}
 		delay(100); DEBUG("*");
 	}
 	time_sync_unix = uS; DEBUGLN(" success");
 	timestamp_unix = temp;
-	log_i("%u , timer %u", temp, timer);
+	log_i("%u , timer %u", temp, wait_sec);
 }
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
 	uint64_t time = uS; uint32_t delta = time - last_interrupt;
 	//static uint64_t last_alarm = 0; static byte alarm_count = 0;
+	timer_restart(timer_sab); 
 	last_interrupt = time; interrupt_delta = delta; tgMsg_t tmp; //sizeof(tgMsg_t)
-	timer_restart(timer_sab);
-	if (alarm_state && delta < 2400000 && delta > 1000) {
+	if (alarm_state && delta < 2400000 && delta > 3000) {
 		//if (time - last_alarm < 15* 60* 1000000) {
 			//if(++alarm_count )
 		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
@@ -132,14 +140,12 @@ static void IRAM_ATTR ISR() {
 }
 
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	uint64_t delta = edata->count_value / 1000;
-	tgMsg_t tmp {
+	uint64_t delta = edata->count_value / 1000; //gptimer_enable(timer_sab);
+	tgMsg_t tmp{
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
 		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
 	}; prev_status = tmp.status;
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr); 
-	gptimer_alarm_config_t alarm_config = {.alarm_count = edata->alarm_value, };
-	gptimer_set_alarm_action(tmr, &alarm_config); //timer_start(tmr);
+	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
 	return false;
 }
 /*		FILE SYSTEM	*/
@@ -177,8 +183,8 @@ try_send: DEBUGLN(str);
 	if (wifi_sta_init()) {
 		if (bot.sendMessage(msg)) {
 			if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
-			return true;
 		}
+		return true;
 	}
 	else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
 	return false;
@@ -239,12 +245,15 @@ bool deleteFile(cch* path) {
 	else DEBUGLN(" delete failed"); return false;
 }
 /*		WIFI	*/
-bool wifi_sta_init(byte wait_sec) {
+bool wifi_sta_init(uint32_t wait_sec) {
 	if (!WiFi.isConnected()) {
-		WiFi.begin(ssid, pass); log_i("Wait connection %u sec...", wait_sec);
-		if (WiFi.waitForConnectResult(wait_sec * 1000) != WL_CONNECTED); {
-			log_i("Not connected"); return false;
-		}
+		WiFi.begin(ssid, pass); wl_status_t status; log_i("Wait connection %u sec", wait_sec);
+		for (wait_sec *= 10; (status = WiFi.status()) != WL_CONNECTED; ) {
+			if (--wait_sec == 0) {
+				log_i("Not connected");
+				return false;
+			}delay(100); DEBUG(status); DEBUG(' ');
+		} DEBUGLN(status);
 	}
 	return true;
 }
@@ -372,8 +381,8 @@ void handleMessage(fb::Update& u) {
 		msg.text = (int)img_state(true); break;
 	case SH("/invalid"):
 		esp_ota_mark_app_invalid_rollback_and_reboot(); return;
-	case SH("/ota_invalidate"):
-		msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
+	/*case SH("/ota_invalidate"):
+		msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;*/
 	case SH("/count"): {uint64_t count = 0;
 		gptimer_get_raw_count(timer_sab, &count);
 		log_d("%llu", (count /= 1000));
@@ -438,7 +447,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* upd)()) {
 	else { msg.text = "Download error"; }
 	log_i("%s", msg.text.c_str());
 	bot_upd.sendMessage(msg);
-	vTaskResume(sendTaskHandle); 
+	vTaskResume(sendTaskHandle);
 	alarm_on(); log_d("StackHighWaterMark %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
