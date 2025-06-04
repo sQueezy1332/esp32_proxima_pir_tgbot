@@ -26,7 +26,7 @@ void mainTask(void*) {
 		case WIFI_INIT:
 			WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
 		case RESTART: bot_upd.tickManual(); yield(); esp_restart();
-		default:Flag = CHECK_MSG;
+		default:Flag = CHECK_MSG; sizeof(WiFiClientSecure);
 		}
 	}
 }
@@ -91,18 +91,18 @@ void setup() {
 
 void time_sync(byte wait_sec) {
 	DEBUG("Time sync "); if (!WiFi.isConnected()) return;
-	time_t temp;
-	for (TickType_t ticker = 0;; --wait_sec) {
+	time_t temp = 0; uint32_t timer = wait_sec * 10;
+	for (TickType_t ticker = 0;; --timer) {
 		time(&temp);
 		if (temp > 1000000000) break;
-		if (wait_sec == 0) {
+		if (timer == 0) {
 			DEBUGLN(" failed!"); return;
 		}
-		vTaskDelayUntil(&ticker, pdMS_TO_TICKS(1000));
+		vTaskDelayUntil(&ticker, pdMS_TO_TICKS(100)); DEBUG("*");
 	}
 	time_sync_unix = uS;
 	timestamp_unix = temp;
-	log_i("%u", timestamp_unix);
+	log_i("%u , timer %u", temp, timer);
 }
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
@@ -143,23 +143,28 @@ void send_alarm_time(Message&& msg, bool no_file) {
 		return;
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = 18 * count, heap = ESP.getFreeHeap();
-	char* ptr; time_t timestamp = 0; struct tm timeinfo {0};
+	char* ptr; size_t offset; time_t timestamp = 0; tm timeinfo { 0 }; int tm_yday_last = 0; //memset(&timeinfo, 0, sizeof(timeinfo));
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
 		str += "file_size \n"; str += file_size; str += "count \n";
 		str += count; str += "str_len \n"; str += str_len; str += "HEAP \n"; str += heap;
 		goto try_send;
 	}ptr = str.begin();
-	for (size_t offset = 0; offset < str_len, file.available();) {
+	for (offset = 0; offset < str_len && file.available();) {
 		file.read((byte*)&timestamp, sizeof(_time_t));
-		localtime_r(&timestamp, &timeinfo); DEBUGLN(timestamp); //"%H:%M:%S %d.%m.%y"
-		strftime(&ptr[offset], 18, "%H:%M:%S %d.%m.%y", &timeinfo);
-		offset += 18;
-		ptr[offset - 1] = '\n';
-	}
-	ptr[str_len - 1] = '\0';
-	reinterpret_cast<uint32_t*>(&str)[2] = str_len; //incapsulation hack //_ptr.len
-try_send: DEBUGLN(str); DEBUGLN();
+		localtime_r(&timestamp, &timeinfo); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
+		strftime(&ptr[offset], 9, "%H:%M:%S", &timeinfo);
+		offset += 8;
+		if (timeinfo.tm_yday != tm_yday_last) {
+			strftime(&ptr[offset], 10, " %d.%m.%y", &timeinfo); 
+			offset += 9;
+			tm_yday_last = timeinfo.tm_yday;
+		}
+		ptr[offset++] = '\n'; //free(timeinfo);
+	}DEBUGLN(); //log_i("%u", ESP.getFreeHeap());
+	ptr[offset - 1] = '\0'; 
+	reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
+try_send: DEBUGLN(str);
 	if (wifi_sta_init()) {
 		Flag = CHECK_MSG;
 		if (bot.sendMessage(msg)) {
@@ -344,7 +349,7 @@ void handleMessage(fb::Update& u) {
 	case SH("/restart"):
 		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
-	case SH("/sync_unix"): {
+	case SH("/sync_time"): {
 		time_sync_unix = uS;
 		msg.text = u[tg_apih::date];
 		timestamp_unix = msg.text.toInt(); }break;
