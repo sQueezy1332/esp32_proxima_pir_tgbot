@@ -12,30 +12,32 @@
 #include <ESPAsyncWebServer.h>
 #include <timer_api.h>
 #include "esp_wifi.h"
-#include "time.h"
+//#include "time.h"
+#include "lwip/apps/sntp.h"
 #ifndef CONFIG_BT_BLE_50_FEATURES_SUPPORTED
 #warning "Not compatible hardware"
 #define NO_BLE
 #endif
-#include <BLEDevice.h>
-#include <BLEAdvertising.h>
+//#include <BLEDevice.h>
+//#include <BLEAdvertising.h>
 #include "OTAserver.h"
 #include "credits.h"
 //#include "BLE_api.h"
 
-#define ESP32C3_LUATOS
+//#define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-#define PIN_LINE 9//4
 #define PIN_PULLUP 5
 #define PIN_BUTTON 9
 #define PIN_RELAY 8
 #if defined ESP32C3_LUATOS
+#define PIN_LINE PIN_BUTTON
 #define PIN_LED_D5 12
 #define PIN_LED 13
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #else
+#define PIN_LINE 4
 #define PIN_LED 8
 #define LED_ON	LOW
 #define LED_OFF HIGH
@@ -96,7 +98,7 @@ QueueHandle_t QueueMsgHandle;	//queue
 //StaticSemaphore_t xMutexBuffer;
 //SemaphoreHandle_t mutex; // mutex
 
-//static volatile stat_t prev_alarm = ok;
+__attribute__((unused)) /*volatile*/ stat_t prev_status = ok;
 stat_t Flag = ok;
 bool alarm_state = false;
 volatile uint64_t last_interrupt = 0;
@@ -108,7 +110,7 @@ gptimer_handle_t timer_sab = nullptr;
 String ssid, pass, _login, _password;
 AsyncWebServer server(80);
 FastBot2 bot(BOT_TOKEN);
-FastBot2 bot_upd(BOT_TOKEN);
+FastBot2 bot_upd(BOT_TOKEN); 
 #ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
@@ -117,9 +119,9 @@ void mainTask(void*);
 void sendTask(void*);
 void setup();
 static void IRAM_ATTR ISR();
-bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
+static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
-void time_sync(byte wait_sec = 10);
+void time_sync(uint32_t wait_sec = 10);
 bool readFile(cch* path, String& Content);
 bool writeFile(cch* path, const String& Content);
 bool appendFile(cch* path, _time_t value);
@@ -128,10 +130,10 @@ void onWiFiConnected(arduino_event_id_t event);
 void get_task_list(String& str);
 String get_info(bool ver = false);
 void wifi_server_init();
-bool wifi_sta_init(byte wait_sec = 5);
+bool wifi_sta_init(uint32_t wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
-void send_alarm_time(Message && msg, bool no_file = 1);
+bool send_alarm_time(Message && msg, bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
@@ -139,7 +141,7 @@ void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
 void alarm_on() { alarm_state = true;enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
-void alarm_off() { alarm_state = false;disableInterrupt(PIN_LINE);  timer_stop(timer_sab); };
+void alarm_off() { alarm_state = false;disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
