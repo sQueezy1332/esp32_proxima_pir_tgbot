@@ -39,16 +39,13 @@ void sendTask(void*) {
 			AutoLed<PIN_LED> led;
 			if (wifi_sta_init()) {
 				switch (event.status) {
-#ifdef DEBUG_ENABLE
-				case ok: msg.text = "OK"; goto OK; break;
-#endif
-					//case ALARM: msg.text = "ALARM"; break;
+				case ALARM: msg.text = "ALARM"; break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case LINE_LOW:  msg.text = "LINE_LOW"; break;
-				default: msg.text = "ALARM";
+				default: msg.text = "OK";
 				}
-				{ msg.text += '\t'; msg.text += (event.delta); }
-			OK:
+				msg.text.concat('\t'); msg.text.concat(event.delta);
+				if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
@@ -77,7 +74,7 @@ void setup() {
 #ifdef ESP32C3_LUATOS
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
-	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, &sabotage_check, 0, 0));
+	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
 	attachInterrupt(PIN_LINE, &ISR, FALLING);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
@@ -115,36 +112,36 @@ void time_sync(uint32_t wait_sec) {
 }
 /*		INTERRUPTS		*/
 static void IRAM_ATTR ISR() {
+	static byte counter = 0; static int last_alarm_delta = -1;
 	uint64_t time = uS; uint32_t delta = time - last_interrupt;
-	//static uint64_t last_alarm = 0; static byte alarm_count = 0;
-	timer_restart(timer_sab); 
-	last_interrupt = time; interrupt_delta = delta; tgMsg_t tmp; //sizeof(tgMsg_t)
-	if (alarm_state && delta < 2400000 && delta > 3000) {
-		//if (time - last_alarm < 15* 60* 1000000) {
-			//if(++alarm_count )
-		tmp = { .status = ALARM,.delta = (uint16_t)(delta / 1000), };
-		prev_status = ALARM;
-		//alarm_count = 0;
-	//}
-	//else { last_alarm = time; return; }
-	//prev_status = ALARM;
+	timer_restart(timer_sab);
+	last_interrupt = time; interrupt_delta = delta;
+	if (alarm_state && delta < 2400000 && delta > 200000) {
+		last_alarm_delta = delta; ++counter; isr_log_d("%u", counter);
+		if (counter < 5) return;
 	}
+	else if (counter == 0) return;
+	else if (counter != 1) { counter = 0; return; } //2 or 3
 #ifdef DEBUG_ENABLE
-	else if (prev_status != ok) {
-		tmp = { .status = ok,/* .delta = (uint16_t)(delta / 1000)*/ };
-		prev_status = ok;
+	if (last_alarm_delta == ok && counter == 1) {
+		tgMsg_t tmp = { .status = ok,.counter = 0, .delta = (uint16_t)(delta / 1000) };
+		xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
+		last_alarm_delta = -1; counter = 0; return;
 	}
 #endif
-	else return;
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
+	tgMsg_t tmp = { .status = ALARM,.counter = counter, .delta = (uint16_t)(last_alarm_delta / 1000) };
+	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);//sizeof(tgMsg_t)
+#ifdef DEBUG_ENABLE
+	last_alarm_delta = ok;
+#endif
 }
 
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	uint64_t delta = edata->count_value / 1000; //gptimer_enable(timer_sab);
+	uint64_t delta = edata->count_value / 1000;
 	tgMsg_t tmp{
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
 		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
-	}; prev_status = tmp.status;
+	};
 	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
 	return false;
 }
@@ -176,7 +173,7 @@ bool send_alarm_time(Message&& msg, bool no_file) {
 			tm_yday_last = timeinfo.tm_yday;
 		}
 		ptr[offset++] = '\n'; //free(timeinfo);
-	}DEBUGLN(); //log_i("%u", ESP.getFreeHeap());
+	}DEBUGLN(); //log_d("%u", ESP.getFreeHeap());
 	ptr[offset - 1] = '\0';
 	reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
 try_send: DEBUGLN(str);
@@ -368,7 +365,7 @@ void handleMessage(fb::Update& u) {
 	case SH("/restart"):
 		msg.text = "ESP restarting...";
 		bot.reboot(); Flag = RESTART; break;
-	case SH("/sync_time"): {
+	case SH("/time_sync"): {
 		time_sync_unix = uS;
 		msg.text = u[tg_apih::date];
 		timestamp_unix = msg.text.toInt(); }break;
@@ -381,11 +378,10 @@ void handleMessage(fb::Update& u) {
 		msg.text = (int)img_state(true); break;
 	case SH("/invalid"):
 		esp_ota_mark_app_invalid_rollback_and_reboot(); return;
-	/*case SH("/ota_invalidate"):
-		msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;*/
-	case SH("/count"): {uint64_t count = 0;
-		gptimer_get_raw_count(timer_sab, &count);
-		log_d("%llu", (count /= 1000));
+		/*case SH("/ota_invalidate"):
+			msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;*/
+	case SH("/timer_count"): {uint64_t count = 0;
+		gptimer_get_raw_count(timer_sab, &count); count /= 1000;
 		msg.text = String(count); } break;
 		//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
@@ -422,7 +418,7 @@ void handleMessage(fb::Update& u) {
 #endif 
 	}DEBUGLN(msg.text);
 	bot_upd.sendMessage(msg);
-}
+	}
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
@@ -448,7 +444,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* upd)()) {
 	log_i("%s", msg.text.c_str());
 	bot_upd.sendMessage(msg);
 	vTaskResume(sendTaskHandle);
-	alarm_on(); log_d("StackHighWaterMark %u", uxTaskGetStackHighWaterMark2(NULL));
+	alarm_on(); log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void updateHandler(fb::Update& u) {
