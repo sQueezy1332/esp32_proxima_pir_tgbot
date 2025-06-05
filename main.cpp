@@ -3,7 +3,7 @@
 extern "C" void app_main() {
 	main_init();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
-	setup();
+	setup(); 
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
@@ -116,9 +116,9 @@ static void IRAM_ATTR ISR() {
 	uint64_t time = uS; uint32_t delta = time - last_interrupt;
 	timer_restart(timer_sab);
 	last_interrupt = time; interrupt_delta = delta;
-	if (alarm_state && delta < 2400000 && delta > 200000) {
+	if (delta < 2400000 /*&& delta > 100000*/) {
 		last_alarm_delta = delta; ++counter; isr_log_d("%u", counter);
-		if (counter < 5) return;
+		if (counter < 10) return;
 	}
 	else if (counter == 0) return;
 	else if (counter != 1) { counter = 0; return; } //2 or 3
