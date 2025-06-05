@@ -45,7 +45,7 @@ void sendTask(void*) {
 				default: msg.text = "OK";
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
-				if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
+				//if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
@@ -75,7 +75,7 @@ void setup() {
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
 	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
-	attachInterrupt(PIN_LINE, &ISR, FALLING);
+	attachInterrupt(PIN_LINE, &interrupt_handler, FALLING);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
 	wifi_server_init();
@@ -111,29 +111,19 @@ void time_sync(uint32_t wait_sec) {
 	log_i("%u , timer %u", temp, wait_sec);
 }
 /*		INTERRUPTS		*/
-static void IRAM_ATTR ISR() {
-	static byte counter = 0; static int last_alarm_delta = -1;
-	uint64_t time = uS; uint32_t delta = time - last_interrupt;
+static void IRAM_ATTR interrupt_handler() {
+	uint64_t time = uS; 
+	if (lineRead) return;
 	timer_restart(timer_sab);
+	uint32_t delta = time - last_interrupt;
 	last_interrupt = time; interrupt_delta = delta;
 	if (delta < 2400000 /*&& delta > 100000*/) {
-		last_alarm_delta = delta; ++counter; isr_log_d("%u", counter);
-		if (counter < 10) return;
+		last_state = ALARM;
 	}
-	else if (counter == 0) return;
-	else if (counter != 1) { counter = 0; return; } //2 or 3
-#ifdef DEBUG_ENABLE
-	if (last_alarm_delta == ok && counter == 1) {
-		tgMsg_t tmp = { .status = ok,.counter = 0, .delta = (uint16_t)(delta / 1000) };
-		xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
-		last_alarm_delta = -1; counter = 0; return;
-	}
-#endif
-	tgMsg_t tmp = { .status = ALARM,.counter = counter, .delta = (uint16_t)(last_alarm_delta / 1000) };
+	else if (last_state == ok) return;
+	else last_state = ok; isr_log_d("%u", last_state);
+	tgMsg_t tmp = { .status = last_state, .delta = (uint16_t)(delta / 1000) };
 	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);//sizeof(tgMsg_t)
-#ifdef DEBUG_ENABLE
-	last_alarm_delta = ok;
-#endif
 }
 
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
