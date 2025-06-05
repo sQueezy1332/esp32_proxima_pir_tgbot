@@ -99,8 +99,8 @@ QueueHandle_t QueueMsgHandle;	//queue
 //StaticSemaphore_t xMutexBuffer;
 //SemaphoreHandle_t mutex; // mutex
 
-//__attribute__((unused)) stat_t prev_status = ok;
 stat_t Flag = ok;
+stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0;
 volatile uint32_t interrupt_delta = 0;
 _time_t timestamp_unix;
@@ -118,7 +118,7 @@ byte ble_data_size = 0;
 void mainTask(void*);
 void sendTask(void*);
 void setup();
-static void IRAM_ATTR ISR();
+static void IRAM_ATTR interrupt_handler();
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
 void time_sync(uint32_t wait_sec = 10);
@@ -172,6 +172,33 @@ struct AutoLed {
 };
 
 bool verifyRollbackLater() { return true; };
+
+static void IRAM_ATTR interrupt_handler_s() {
+	static byte counter = 0; static int last_alarm_delta = -1;
+	uint64_t time = uS;
+	if (lineRead) return;
+	uint32_t delta = time - last_interrupt;
+	timer_restart(timer_sab);
+	last_interrupt = time; interrupt_delta = delta;
+	if (delta < 2400000 /*&& delta > 100000*/) {
+		last_alarm_delta = delta; ++counter; isr_log_d("%u", counter);
+		if (counter < 10) return;
+	}
+	else if (counter == 0) return;
+	else if (counter != 1) { counter = 0; return; } //2 or 3
+#ifdef DEBUG_ENABLE
+	if (last_alarm_delta == ok && counter == 1) {
+		tgMsg_t tmp = { .status = ok,.counter = 0, .delta = (uint16_t)(delta / 1000) };
+		xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
+		last_alarm_delta = -1; counter = 0; return;
+	}
+#endif
+	tgMsg_t tmp = { .status = ALARM,.counter = counter, .delta = (uint16_t)(last_alarm_delta / 1000) };
+	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);//sizeof(tgMsg_t)
+#ifdef DEBUG_ENABLE
+	last_alarm_delta = ok;
+#endif
+}
 
 //void ble_advertising() {
 //	BLEMultiAdvertising advert(1);
