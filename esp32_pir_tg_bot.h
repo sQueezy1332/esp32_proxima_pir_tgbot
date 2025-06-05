@@ -86,6 +86,7 @@ typedef enum : uint8_t {
 
 typedef struct /*__attribute__((packed))*/ {
 	stat_t status;
+	byte counter;
 	uint16_t delta;
 } tgMsg_t;
 
@@ -98,9 +99,8 @@ QueueHandle_t QueueMsgHandle;	//queue
 //StaticSemaphore_t xMutexBuffer;
 //SemaphoreHandle_t mutex; // mutex
 
-__attribute__((unused)) /*volatile*/ stat_t prev_status = ok;
+//__attribute__((unused)) stat_t prev_status = ok;
 stat_t Flag = ok;
-bool alarm_state = false;
 volatile uint64_t last_interrupt = 0;
 volatile uint32_t interrupt_delta = 0;
 _time_t timestamp_unix;
@@ -140,8 +140,8 @@ void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { alarm_state = true;enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
-void alarm_off() { alarm_state = false;disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
+void alarm_on() {enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_off() {disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
@@ -186,6 +186,17 @@ bool verifyRollbackLater() { return true; };
 //	delay(1000);                          // it is just for simplicity this example, to let ble stack to set extended scan params
 //	pBLEScan->startExtScan(100, 3);  // scan duration in n * 10ms, period - repeat after n seconds (period >= duration)
 //}
+
+//void IRAM_ATTR timebench() {
+//	uint64_t start, end; uint64_t count = 0; //gptimer_get_captured_count(timer_sab, &count);
+//	ENTER_CRITICAL()
+//		start = uS;
+//	gptimer_get_raw_count(timer_sab, &count);
+//	end = uS;
+//	EXIT_CRITICAL()
+//		log_d("delta = %llu", end - start);
+//}
+
 void suicide_func() {
 	//extern StackType_t* shitstack;
 	uint32_t rnd = random(0x3FFAE000, 0x400B8000);
