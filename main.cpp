@@ -3,7 +3,7 @@
 extern "C" void app_main() {
 	main_init();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
-	setup(); 
+	setup();
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
@@ -42,10 +42,10 @@ void sendTask(void*) {
 				case ALARM: msg.text = "ALARM"; break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case LINE_LOW:  msg.text = "LINE_LOW"; break;
-				default: msg.text = "OK"; goto OK;
+				default: msg.text = "OK"; goto _OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
-			OK://if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
+			_OK://if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
@@ -112,7 +112,7 @@ void time_sync(uint32_t wait_sec) {
 }
 /*		INTERRUPTS		*/
 static void IRAM_ATTR interrupt_handler() {
-	uint64_t time = uS; 
+	uint64_t time = uS;
 	if (lineRead) return;
 	timer_restart(timer_sab);
 	uint32_t delta = time - last_interrupt;
@@ -128,10 +128,10 @@ static void IRAM_ATTR interrupt_handler() {
 
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
 	uint64_t delta = edata->count_value / 1000;
-	tgMsg_t tmp{
+	tgMsg_t tmp {
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
 		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
-	};
+	}; last_state = tmp.status;
 	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
 	return false;
 }
@@ -408,7 +408,7 @@ void handleMessage(fb::Update& u) {
 #endif 
 	}DEBUGLN(msg.text);
 	bot_upd.sendMessage(msg);
-	}
+}
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
