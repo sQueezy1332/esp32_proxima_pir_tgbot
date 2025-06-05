@@ -42,10 +42,10 @@ void sendTask(void*) {
 				case ALARM: msg.text = "ALARM"; break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case LINE_LOW:  msg.text = "LINE_LOW"; break;
-				default: msg.text = "OK";
+				default: msg.text = "OK"; goto OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
-				//if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
+			OK://if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
