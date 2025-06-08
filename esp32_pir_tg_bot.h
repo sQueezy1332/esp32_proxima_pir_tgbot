@@ -10,7 +10,6 @@
 #include <SPIFFS.h>
 #include <WiFiClientSecure.h>
 #include <ESPAsyncWebServer.h>
-#include <timer_api.h>
 #include "esp_wifi.h"
 //#include "time.h"
 #include "lwip/apps/sntp.h"
@@ -64,8 +63,8 @@
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
 #define TIMER_RECONNECT	60 * 60 * 1000000ul
-#define TIMER_SABOTAGE	2500000
-#define TIMER_CHECK		1000000
+#define TIMER_SABOTAGE	2500'000
+#define TIMER_CHECK		1'000000
 #define TIMER_RESEND	60 * 1000000ul
 typedef uint32_t _time_t;
 using fb::Message, fb::Fetcher;
@@ -100,8 +99,8 @@ QueueHandle_t QueueMsgHandle;	//queue
 //SemaphoreHandle_t mutex; // mutex
 
 stat_t Flag = ok;
-stat_t last_state = ok;
-volatile uint64_t last_interrupt = 0;
+__attribute__((unused)) stat_t last_state = ok;
+volatile uint64_t last_interrupt = 10'000'000;
 volatile uint32_t interrupt_delta = 0;
 _time_t timestamp_unix;
 uint64_t time_sync_unix;
@@ -118,7 +117,7 @@ byte ble_data_size = 0;
 void mainTask(void*);
 void sendTask(void*);
 void setup();
-static void IRAM_ATTR interrupt_handler();
+static void IRAM_ATTR isr_handler(void*);
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
 void time_sync(uint32_t wait_sec = 10);
@@ -140,8 +139,8 @@ void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() {enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
-void alarm_off() {disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
+void alarm_on() { gpio_intr_enable((gpio_num_t)PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_off() { gpio_intr_disable((gpio_num_t)PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
@@ -154,9 +153,9 @@ bool auth_handler(AsyncWebServerRequest*& request) {
 }
 
 void ota_progress(size_t progress, size_t size) {
-	static auto ota_timestamp = millis(); auto time = millis();
+	static auto ota_timestamp = uS; auto time = uS;
 	if (progress == 0) DEBUGF("OTA overall size bytes: %u\n", size);
-	if (time - ota_timestamp > 500) {
+	if (time - ota_timestamp > 500000) {
 		ota_timestamp = time;
 		DEBUG("OTA Progress bytes: ");
 		DEBUGLN(progress);
@@ -214,15 +213,15 @@ static void IRAM_ATTR interrupt_handler_s() {
 //	pBLEScan->startExtScan(100, 3);  // scan duration in n * 10ms, period - repeat after n seconds (period >= duration)
 //}
 
-//void IRAM_ATTR timebench() {
-//	uint64_t start, end; uint64_t count = 0; //gptimer_get_captured_count(timer_sab, &count);
-//	ENTER_CRITICAL()
-//		start = uS;
-//	gptimer_get_raw_count(timer_sab, &count);
-//	end = uS;
-//	EXIT_CRITICAL()
-//		log_d("delta = %llu", end - start);
-//}
+void IRAM_ATTR timebench() {
+	uint64_t start, end; uint64_t count = 0; //gptimer_get_captured_count(timer_sab, &count);
+	ENTER_CRITICAL()
+		start = uS;
+	//gptimer_get_raw_count(timer_sab, &count);
+	end = uS;
+	EXIT_CRITICAL()
+		log_d("delta = %llu", end - start);
+}
 
 void suicide_func() {
 	//extern StackType_t* shitstack;
