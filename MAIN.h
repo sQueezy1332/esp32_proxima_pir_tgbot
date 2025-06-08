@@ -5,8 +5,9 @@
 #include "esp_task_wdt.h"
 #include "soc/rtc.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"
+#include "driver/gptimer.h"
 #include "esp_ota_ops.h"
+#include "hal/gpio_hal.h"
 #if defined CONFIG_AUTOSTART_ARDUINO
 #include "Arduino.h"
 #pragma message "CONFIG_AUTOSTART_ARDUINO"
@@ -52,6 +53,9 @@ bool btInUse() { return false; }
 #define SEC(x) ((x)*1000000)
 #define ENTER_CRITICAL() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux)
 #define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);}
+#define timer_start(x) gptimer_start(x)
+#define timer_stop(x) gptimer_stop(x)
+#define timer_restart(x) gptimer_set_raw_count(x, 0)
 typedef const char cch; typedef const uint8_t cbyte; typedef uint32_t dword; typedef uint64_t qword;
 
 void nvs_init() {
@@ -93,7 +97,7 @@ void main_init() {
 	setCpuFrequencyMhz(F_CPU / 1000000);
 #endif
 #if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE || defined DEBUG_ENABLE
-	log_d("Serial begin"); Serial.begin(115200);
+	log_v("Serial begin"); Serial.begin();
 #endif
 #if ARDUINO_USB_MSC_ON_BOOT && !ARDUINO_USB_MODE
 	MSC_Update.begin();
@@ -120,6 +124,65 @@ void main_init() {
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 	//if (!verifyRollbackLater()) { log_i("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
 #endif
+}
+
+#ifndef  __cplusplus
+extern "C" {
+#endif //  __cplusplus
+	esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 1) {
+		gptimer_alarm_config_t alarm_config{
+			.alarm_count = value,
+			.reload_count = 0,
+			.flags = {.auto_reload_on_alarm = reload} //.flags.auto_reload_on_alarm = reload,
+		};
+		return gptimer_set_alarm_action(handle, &alarm_config);
+	}
+	esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func, bool start = 1, bool reload = 1, uint8_t prio = 1) {
+		esp_err_t ret = ESP_OK;
+		gptimer_config_t config{
+			.clk_src = GPTIMER_CLK_SRC_DEFAULT,
+			.direction = GPTIMER_COUNT_UP,
+			.resolution_hz = 1000000,
+			.intr_priority = prio,
+			.flags = {.intr_shared = 1, },
+		}; //SOC_TIMER_GROUP_TOTAL_TIMERS
+		gptimer_event_callbacks_t cbs = { .on_alarm = func };
+		if ((ret = gptimer_new_timer(&config, &handle))
+			|| (ret = gptimer_register_event_callbacks(handle, &cbs, NULL))
+			|| (ret = gptimer_enable(handle))
+			|| (ret = timer_alarm(value, handle, reload)))
+			goto exit;
+		if (start) ret = gptimer_start(handle);
+	exit:log_v("ret = %u", ret);
+		return ret;
+	}
+#ifndef  __cplusplus
+}
+#endif //  __cplusplus
+
+void pinMode(uint8_t pin, uint8_t mode) {
+	if (mode >= 0x20) return; log_v("pinMode(%u, %u)", pin, mode);
+	gpio_hal_context_t gpiohal{ .dev = GPIO_LL_GET_HW(GPIO_PORT_0) };
+	gpio_config_t conf = {
+	.pin_bit_mask = (1ULL << pin),              /*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
+	.mode = GPIO_MODE_DISABLE,                  /*!< GPIO mode: set input/output mode                     */
+	.pull_up_en = GPIO_PULLUP_DISABLE,          /*!< GPIO pull-up                                         */
+	.pull_down_en = GPIO_PULLDOWN_DISABLE,      /*!< GPIO pull-down                                       */
+	.intr_type = (gpio_int_type_t)gpiohal.dev->pin[pin].int_type /*!< GPIO interrupt type - previously set                 */
+	};
+	if (mode < 0x20) {  //io
+		conf.mode = gpio_mode_t(mode & (INPUT | OUTPUT));
+		if (mode & OPEN_DRAIN) {
+			conf.mode = (gpio_mode_t)((int)conf.mode | GPIO_MODE_DEF_OD);
+		}
+		if (mode & PULLUP) {
+			conf.pull_up_en = GPIO_PULLUP_ENABLE;
+		}
+		if (mode & PULLDOWN) {
+			conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+		}
+	}
+	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
 //xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE);
 #undef CONFIG_AUTOSTART_ARDUINO
