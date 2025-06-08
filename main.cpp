@@ -19,7 +19,7 @@ void mainTask(void*) {
 			else Flag = CHECK_MSG;
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
-			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300));; continue;
+			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300)); continue;
 		case WIFI_DISCONNECT:
 			time_sync(); WiFi.disconnect();
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(60 * 60 * 1000));
@@ -41,7 +41,7 @@ void sendTask(void*) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
-				case LINE_LOW:  msg.text = "LINE_LOW"; break;
+				case LINE_LOW:  msg.text = "LINE_LOW";  break;
 				default: msg.text = "OK"; goto _OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
@@ -59,8 +59,7 @@ void sendTask(void*) {
 				log_d("%u", ESP.getFreeHeap());
 			}
 			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
-			if (event.status != ok)
-			{
+			if (event.status != ok) {
 				appendFile(ALARM_PATH, timestamp_unix + ((uS - time_sync_unix) / 1000000));
 				Flag = RESEND_MSG;
 			}
@@ -70,12 +69,14 @@ void sendTask(void*) {
 /*		INIT	*/
 void setup() {
 	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
-	pinMode(PIN_LED, OUTPUT); AutoLed<PIN_LED> led;//pinMode(PIN_RELAY, OUTPUT);
+	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
+	AutoLed<PIN_LED> led;//pinMode(PIN_RELAY, OUTPUT);
 #ifdef ESP32C3_LUATOS
 	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
 #endif
 	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
-	attachInterrupt(PIN_LINE, &interrupt_handler, FALLING);
+	_CHECK(gpio_install_isr_service(0)); _CHECK(gpio_isr_handler_add((gpio_num_t)PIN_LINE, isr_handler, NULL));
+	_CHECK(gpio_set_intr_type((gpio_num_t)PIN_LINE, GPIO_INTR_NEGEDGE));
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
 	wifi_server_init();
@@ -91,8 +92,12 @@ void setup() {
 	bot_upd.skipUpdates(-2);
 	bot_upd.setPollMode(fb::Poll::Long, 30000);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
+#ifndef DEBUG_ENABLE
 	send_alarm_time(Message("", CHAT_ID), false);
+#endif // DEBUG_ENABLE
 	alarm_on();
+	/*gpio_hal_context_t gpiohal;
+	gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);*/DEBUGLN("END setup()");
 }
 
 void time_sync(uint32_t wait_sec) {
@@ -111,28 +116,35 @@ void time_sync(uint32_t wait_sec) {
 	log_i("%u , timer %u", temp, wait_sec);
 }
 /*		INTERRUPTS		*/
-static void IRAM_ATTR interrupt_handler() {
-	uint64_t time = uS;
+static void IRAM_ATTR isr_handler(void*) {
 	if (lineRead) return;
-	timer_restart(timer_sab);
+	uint64_t time = uS;
+	timer_restart(timer_sab); tgMsg_t tmp;
 	uint32_t delta = time - last_interrupt;
 	last_interrupt = time; interrupt_delta = delta;
-	if (delta < 2400000 /*&& delta > 100000*/) {
-		last_state = ALARM;
-	}
+	if (delta < 2400000 && delta > 10000)
+#ifdef DEBUG_ENABLE
+	{ last_state = tmp.status = ALARM; }
 	else if (last_state == ok) return;
-	else last_state = ok; isr_log_d("%u", last_state);
-	tgMsg_t tmp = { .status = last_state, .delta = (uint16_t)(delta / 1000) };
+	else { last_state = tmp.status = ok; isr_log_d("%u", last_state); }
+#else
+	{ tmp.status = ALARM; }
+	else return;
+#endif // DEBUG_ENABLE
+	tmp.delta = (uint16_t)(delta / 1000);
 	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);//sizeof(tgMsg_t)
 }
 
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	uint64_t delta = edata->count_value / 1000;
-	tgMsg_t tmp {
+	uint64_t delta = edata->count_value / 1000; 
+	tgMsg_t tmp{
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
 		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
-	}; last_state = tmp.status;
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
+	};
+#ifdef DEBUG_ENABLE
+	last_state = tmp.status;
+#endif // DEBUG_ENABLE
+	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr); 
 	return false;
 }
 /*		FILE SYSTEM	*/
@@ -192,35 +204,24 @@ bool readFile(cch* path, String& Content) {
 bool writeFile(cch* path, const String& Content) {
 	DEBUG("Writing file: "); DEBUG(path);
 	fs::File file = SPIFFS.open(path, FILE_WRITE);
-	if (!file) {
-		DEBUGLN(" failed to open file for writing");
-		return false;
-	}
-	if (file.print(Content)) {
+	if (!file) { DEBUGLN(" failed to open file for writing"); }
+	else if (file.print(Content)) {
 		DEBUGLN(" file written");
 		return true;
 	}
-	else {
-		DEBUGLN(" write failed");
-		return false;
-	}
+	else DEBUGLN(" write failed");
+	return false;
 }
 
 bool appendFile(cch* path, _time_t value) {
 	DEBUG("Append file: "); DEBUG(path);
 	fs::File file = SPIFFS.open(path, FILE_APPEND);
-	if (!file) {
-		DEBUGLN(" failed to open file for writing");
-		return false;
+	if (!file) { DEBUGLN(" failed to open file for writing"); }
+	else if (file.write((byte*)&value, sizeof(_time_t))) {
+		DEBUGLN(" file written"); return true;
 	}
-	if (file.write((byte*)&value, sizeof(_time_t))) {
-		DEBUGLN(" file written");
-		return true;
-	}
-	else {
-		DEBUGLN(" write failed");
-		return false;
-	}
+	else DEBUGLN(" write failed");
+	return false;
 }
 
 bool deleteFile(cch* path) {
@@ -237,7 +238,7 @@ bool wifi_sta_init(uint32_t wait_sec) {
 		WiFi.begin(ssid, pass); wl_status_t status; log_i("Wait connection %u sec", wait_sec);
 		for (wait_sec *= 10; (status = WiFi.status()) != WL_CONNECTED; ) {
 			if (--wait_sec == 0) {
-				log_i("Not connected");
+				log_w("Not connected");
 				return false;
 			}delay(100); DEBUG(status); DEBUG(' ');
 		} DEBUGLN(status);
@@ -297,7 +298,7 @@ void wifi_server_init() {
 	ota::server_init(server, ota_progress);
 	log_v("server.begin()");
 	server.begin(); // Start server
-}
+	}
 
 void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
@@ -408,7 +409,7 @@ void handleMessage(fb::Update& u) {
 #endif 
 	}DEBUGLN(msg.text);
 	bot_upd.sendMessage(msg);
-}
+	}
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
