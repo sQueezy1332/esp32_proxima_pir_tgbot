@@ -26,17 +26,18 @@
 #define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-#define PIN_PULLUP 3
 #define PIN_BUTTON 9
 #define PIN_RELAY 8
 #if defined ESP32C3_LUATOS
 #define PIN_LINE 4
+#define PIN_PULLUP 5
 #define PIN_LED_D5 12
 #define PIN_LED 13
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #else
 #define PIN_LINE 4
+#define PIN_PULLUP 3
 #define PIN_LED 8
 #define LED_ON	LOW
 #define LED_OFF HIGH
