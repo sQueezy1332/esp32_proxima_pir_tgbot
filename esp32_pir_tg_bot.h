@@ -29,8 +29,8 @@
 #define PIN_BUTTON 9
 #define PIN_RELAY 8
 #if defined ESP32C3_LUATOS
-#define PIN_LINE 4
-#define PIN_PULLUP 5
+#define PIN_LINE 5
+#define PIN_PULLUP 4
 #define PIN_LED_D5 12
 #define PIN_LED 13
 #define LED_ON	HIGH
@@ -139,8 +139,8 @@ void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
-void alarm_off() { disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
+void alarm_on() { /*dWrite(PIN_PULLUP, 1);*/enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_off() { /*dWrite(PIN_PULLUP, 0);*/disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
