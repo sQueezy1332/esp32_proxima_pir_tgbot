@@ -466,15 +466,15 @@ void get_task_list(String& str) {
 String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(255);
-	str += "Connected to: "; str += ssid; str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(NULL);
+	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nlast_interrupt =  "; str += last_interrupt;
-	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += 's';
+	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
-		str += "\nCompiled: "; str += __DATE__; str += '\t'; str += __TIME__; str += '\n';
+		str += ("\nCompiled: " __DATE__ "\t" __TIME__ "\n");
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) {
 			str += "ESP_OTA_IMG_PENDING_VERIFY";
 		}
