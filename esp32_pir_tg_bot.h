@@ -23,14 +23,14 @@
 #include "credits.h"
 //#include "BLE_api.h"
 
-//#define ESP32C3_LUATOS
+#define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
-#define PIN_PULLUP 5
+#define PIN_PULLUP 3
 #define PIN_BUTTON 9
 #define PIN_RELAY 8
 #if defined ESP32C3_LUATOS
-#define PIN_LINE PIN_BUTTON
+#define PIN_LINE 4
 #define PIN_LED_D5 12
 #define PIN_LED 13
 #define LED_ON	HIGH
@@ -100,7 +100,7 @@ QueueHandle_t QueueMsgHandle;	//queue
 
 stat_t Flag = ok;
 __attribute__((unused)) stat_t last_state = ok;
-volatile uint64_t last_interrupt = 10'000'000;
+volatile uint64_t last_interrupt = 0xFFFFFF;
 volatile uint32_t interrupt_delta = 0;
 _time_t timestamp_unix;
 uint64_t time_sync_unix;
@@ -116,8 +116,7 @@ byte ble_data_size = 0;
 #endif
 void mainTask(void*);
 void sendTask(void*);
-void setup();
-static void IRAM_ATTR isr_handler(void*);
+static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
 void time_sync(uint32_t wait_sec = 10);
@@ -139,8 +138,8 @@ void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { gpio_intr_enable((gpio_num_t)PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
-void alarm_off() { gpio_intr_disable((gpio_num_t)PIN_LINE); timer_stop(timer_sab); };
+void alarm_on() { enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_off() { disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
