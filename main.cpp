@@ -3,11 +3,11 @@
 extern "C" void app_main() {
 	main_init();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
-	pinMode(PIN_LINE, INPUT_PULLUP); pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
+	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
 	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led;
 #ifdef ESP32C3_LUATOS
-	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
+	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, 0);
 #endif
 	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
@@ -400,7 +400,7 @@ void handleMessage(fb::Update& u) {
 #endif 
 	}DEBUGLN(msg.text);
 	bot_upd.sendMessage(msg);
-	}
+}
 
 void handleDocument(fb::Update& u) {
 	switch (u.message()[tg_apih::caption].hash()) {
@@ -485,7 +485,7 @@ String get_info(bool ver) {
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; char* ptr = str.begin();
-	reinterpret_cast<uint32_t*>(&str)[2] = str_size - 1;
+	reinterpret_cast<uint32_t*>(&str)[2] = str_size;
 	for (;;) {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
@@ -507,10 +507,13 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
 	for (byte ready = 0, result = 0; *ptr; ++ptr) {
 		switch (*ptr) {
 		case'0'... '9':
+			if (result & 0xf) result <<= 4;
 			result |= (*ptr ^ 0x30); break;
 		case 'A'... 'F':
+			if (result & 0xf) result <<= 4;
 			result |= *ptr - 55; break;
 		case 'a'...'f':
+			if (result & 0xf) result <<= 4;
 			result |= *ptr - 87; break;
 		default:
 			if (ready) goto rdy;
@@ -523,7 +526,6 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
 			result = 0; ready = 0;
 			continue;
 		}
-		if (result & 0xf) result <<= 4;
 		ready = 1;
 	}
 	return realloc(buf, (data_len = i));
