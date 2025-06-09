@@ -1,12 +1,36 @@
 #include "esp32_pir_tg_bot.h"
-
+/*		INIT	*/
 extern "C" void app_main() {
 	main_init();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
-	setup();
+	pinMode(PIN_LINE, INPUT_PULLUP); pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
+	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
+	AutoLed<PIN_LED> led;
+#ifdef ESP32C3_LUATOS
+	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
+#endif
+	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
+	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
+	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
+	WiFi.mode(WIFI_MODE_APSTA);
+	wifi_server_init();
+	read_credentials();
+	wifi_sta_init();
+#ifdef DEBUG_ENABLE
+	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
+#endif 
+	//setenv("TZ", "MSK-3", 1); tzset();
+	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); time_sync();
+	bot_upd.attachUpdate(updateHandler);
+	bot_upd.skipUpdates(-2);
+	bot_upd.setPollMode(fb::Poll::Long, 30000);
+#ifndef DEBUG_ENABLE
+	send_alarm_time(Message("", CHAT_ID), false);
+#endif // DEBUG_ENABLE
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	bot.sendMessage(Message(get_info(true), CHAT_ID));
+	alarm_on(); log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void mainTask(void*) {
@@ -15,8 +39,7 @@ void mainTask(void*) {
 		case RESEND_MSG:
 			if (!send_alarm_time(Message("", CHAT_ID))) {
 				log_i("%u", Flag); delay(15 * 60 * 1000);
-			}
-			else Flag = CHECK_MSG;
+			} else Flag = CHECK_MSG;
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300)); continue;
@@ -66,39 +89,6 @@ void sendTask(void*) {
 		}//vTaskGetInfo();
 	}
 }
-/*		INIT	*/
-void setup() {
-	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
-	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
-	AutoLed<PIN_LED> led;//pinMode(PIN_RELAY, OUTPUT);
-#ifdef ESP32C3_LUATOS
-	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, LED_OFF);
-#endif
-	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
-	_CHECK(gpio_install_isr_service(0)); _CHECK(gpio_isr_handler_add((gpio_num_t)PIN_LINE, isr_handler, NULL));
-	_CHECK(gpio_set_intr_type((gpio_num_t)PIN_LINE, GPIO_INTR_NEGEDGE));
-	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
-	WiFi.mode(WIFI_MODE_APSTA);
-	wifi_server_init();
-	read_credentials();
-	wifi_sta_init();
-#ifdef DEBUG_ENABLE
-	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
-#endif 
-	//setenv("TZ", "MSK-3", 1); tzset();
-	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov");
-	time_sync();
-	bot_upd.attachUpdate(updateHandler);
-	bot_upd.skipUpdates(-2);
-	bot_upd.setPollMode(fb::Poll::Long, 30000);
-	bot.sendMessage(Message(get_info(true), CHAT_ID));
-#ifndef DEBUG_ENABLE
-	send_alarm_time(Message("", CHAT_ID), false);
-#endif // DEBUG_ENABLE
-	alarm_on();
-	/*gpio_hal_context_t gpiohal;
-	gpiohal.dev = GPIO_LL_GET_HW(GPIO_PORT_0);*/DEBUGLN("END setup()");
-}
 
 void time_sync(uint32_t wait_sec) {
 	DEBUG("Time sync "); if (!WiFi.isConnected()) return;
@@ -116,17 +106,18 @@ void time_sync(uint32_t wait_sec) {
 	log_i("%u , timer %u", temp, wait_sec);
 }
 /*		INTERRUPTS		*/
-static void IRAM_ATTR isr_handler(void*) {
+static void IRAM_ATTR isr_handler(/*void**/) {
 	if (lineRead) return;
 	uint64_t time = uS;
 	timer_restart(timer_sab); tgMsg_t tmp;
 	uint32_t delta = time - last_interrupt;
 	last_interrupt = time; interrupt_delta = delta;
-	if (delta < 2400000 && delta > 10000)
+	if (delta < 2400000 /*&& delta > 10000*/)
 #ifdef DEBUG_ENABLE
 	{ last_state = tmp.status = ALARM; }
 	else if (last_state == ok) return;
-	else { last_state = tmp.status = ok; isr_log_d("%u", last_state); }
+	else { last_state = tmp.status = ok; }
+	isr_log_d("%u", last_state);
 #else
 	{ tmp.status = ALARM; }
 	else return;
