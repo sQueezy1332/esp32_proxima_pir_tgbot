@@ -1,15 +1,15 @@
 #include "esp32_pir_tg_bot.h"
 /*		INIT	*/
 extern "C" void app_main() {
-	main_init();
+	main_init();//nvs_func();
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
 	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
-	pinMode(PIN_LED, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
+	pinMode(PIN_LED, INPUT); //pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led;
 #ifdef ESP32C3_LUATOS
-	pinMode(PIN_LED_D5, OUTPUT); dWrite(PIN_LED_D5, 0);
+	pinMode(PIN_LED_D5, INPUT_PULLUP); //AutoLed<PIN_LED_D5> led;
 #endif
-	_CHECK(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
+	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 0, 0));
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_APSTA);
@@ -19,17 +19,16 @@ extern "C" void app_main() {
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
 #endif 
-	//setenv("TZ", "MSK-3", 1); tzset();
-	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); time_sync();
+	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot_upd.attachUpdate(updateHandler);
 	bot_upd.skipUpdates(-2);
 	bot_upd.setPollMode(fb::Poll::Long, 30000);
 #ifndef DEBUG_ENABLE
-	send_alarm_time(Message("", CHAT_ID), false);
+	send_alarm_time(Message("", CHAT_ID), bot_upd, false);
 #endif // DEBUG_ENABLE
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
-	bot.sendMessage(Message(get_info(true), CHAT_ID));
+	bot_upd.sendMessage(Message(get_info(true), CHAT_ID));
 	alarm_on(); log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
@@ -37,20 +36,17 @@ void mainTask(void*) {
 	for (TickType_t tick = 0;;) {
 		switch (Flag) {
 		case RESEND_MSG:
-			if (!send_alarm_time(Message("", CHAT_ID))) {
-				log_i("%u", Flag); delay(15 * 60 * 1000);
-			} else Flag = CHECK_MSG;
+			if (send_alarm_time(Message("", CHAT_ID))) Flag = CHECK_MSG;
+			else { log_i("%u", Flag); delay(15 * 60 * 1000); }
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300)); continue;
-		case WIFI_DISCONNECT:
-			time_sync(); WiFi.disconnect();
+		case WIFI_DISCONNECT: time_sync(); WiFi.disconnect();
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(60 * 60 * 1000));
-			if (wifi_sta_init()) { bot.tickManual(); } continue;
-		case WIFI_INIT:
-			WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
+		case WIFI_RECON: if (wifi_sta_init()) { bot.tickManual(); } continue;
+		case WIFI_INIT: WiFi.begin(ssid, pass); Flag = CHECK_MSG; continue;
 		case RESTART: bot_upd.tickManual(); yield(); esp_restart();
-		default:Flag = CHECK_MSG;
+		default: delay(1000); Flag = CHECK_MSG;
 		}
 	}
 }
@@ -101,7 +97,7 @@ void time_sync(uint32_t wait_sec) {
 		}
 		delay(100); DEBUG("*");
 	}
-	time_sync_unix = uS; DEBUGLN(" success");
+	time_sync_unix = uS; DEBUG(" success");
 	timestamp_unix = temp;
 	log_i("%u , timer %u", temp, wait_sec);
 }
@@ -139,39 +135,41 @@ static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_e
 	return false;
 }
 /*		FILE SYSTEM	*/
-bool send_alarm_time(Message&& msg, bool no_file) {
+bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); //sizeof(Message);108
 	String& str = msg.text; File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
-		if (no_file) { str = "No file"; bot.sendMessage(msg); }
+		if (no_file) { str = "No file"; _bot.sendMessage(msg); }
 		return true;
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(_time_t), str_len = 18 * count, heap = ESP.getFreeHeap();
-	char* ptr; size_t offset; time_t timestamp = 0; tm timeinfo{ 0 }; int tm_yday_last = 0; //memset(&timeinfo, 0, sizeof(timeinfo));
+	char* ptr; size_t offset; time_t timestamp = 0;// tm timeinfo{ 0 }; int tm_yday_last = 0;
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
 		str += "file_size \n"; str += file_size; str += "count \n";
 		str += count; str += "str_len \n"; str += str_len; str += "HEAP \n"; str += heap;
 		goto try_send;
-	}ptr = str.begin();
+	}//ptr = str.begin();
 	for (offset = 0; offset < str_len && file.available();) {
-		file.read((byte*)&timestamp, sizeof(_time_t));
-		localtime_r(&timestamp, &timeinfo); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
-		strftime(&ptr[offset], 9, "%H:%M:%S", &timeinfo);
-		offset += 8;
-		if (timeinfo.tm_yday != tm_yday_last) {
-			strftime(&ptr[offset], 10, " %d.%m.%y", &timeinfo);
-			offset += 9;
-			tm_yday_last = timeinfo.tm_yday;
-		}
-		ptr[offset++] = '\n'; //free(timeinfo);
+		file.read((byte*)&timestamp, sizeof(_time_t)); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
+		//localtime_r(&timestamp, &timeinfo); 
+		////DEBUGLN(ctime(&timestamp));
+		//strftime(&ptr[offset], 9, "%H:%M:%S", &timeinfo);
+		//offset += 8;
+		//if (timeinfo.tm_yday != tm_yday_last) {
+		//	strftime(&ptr[offset], 10, " %d.%m.%y", &timeinfo);
+		//	offset += 9;
+		//	tm_yday_last = timeinfo.tm_yday;
+		//}
+		//ptr[offset++] = '\n'; //free(timeinfo);
+		str += (uint32_t)timestamp; str += "\n";
 	}DEBUGLN(); //log_d("%u", ESP.getFreeHeap());
-	ptr[offset - 1] = '\0';
-	reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
+	//ptr[offset - 1] = '\0';
+	//reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
 try_send: DEBUGLN(str);
 	if (wifi_sta_init()) {
-		if (bot.sendMessage(msg)) {
+		if (_bot.sendMessage(msg)) {
 			if (event_id) { WiFi.removeEvent(event_id); event_id = 0; }
 		}
 		return true;
@@ -197,7 +195,7 @@ bool writeFile(cch* path, const String& Content) {
 	fs::File file = SPIFFS.open(path, FILE_WRITE);
 	if (!file) { DEBUGLN(" failed to open file for writing"); }
 	else if (file.print(Content)) {
-		DEBUGLN(" file written");
+		DEBUGLN(" file written"); 
 		return true;
 	}
 	else DEBUGLN(" write failed");
@@ -209,7 +207,8 @@ bool appendFile(cch* path, _time_t value) {
 	fs::File file = SPIFFS.open(path, FILE_APPEND);
 	if (!file) { DEBUGLN(" failed to open file for writing"); }
 	else if (file.write((byte*)&value, sizeof(_time_t))) {
-		DEBUGLN(" file written"); return true;
+		DEBUGLN(" file written"); 
+		return true;
 	}
 	else DEBUGLN(" write failed");
 	return false;
@@ -221,17 +220,16 @@ bool deleteFile(cch* path) {
 		DEBUGLN(" file deleted");
 		return true;
 	}
-	else DEBUGLN(" delete failed"); return false;
+	else DEBUGLN(" delete failed");
+	return false;
 }
 /*		WIFI	*/
 bool wifi_sta_init(uint32_t wait_sec) {
-	if (!WiFi.isConnected()) {
-		WiFi.begin(ssid, pass); wl_status_t status; log_i("Wait connection %u sec", wait_sec);
+	if (!WiFi.isConnected()) { 
+		if(!WiFi.STA.begin(true)) return false; wl_status_t status; log_i("Wait connection %u sec", wait_sec);
 		for (wait_sec *= 10; (status = WiFi.status()) != WL_CONNECTED; ) {
-			if (--wait_sec == 0) {
-				log_w("Not connected");
-				return false;
-			}delay(100); DEBUG(status); DEBUG(' ');
+			if (--wait_sec == 0) { log_w("Not connected"); return false; }
+			delay(100); DEBUG(status); DEBUG(' ');
 		} DEBUGLN(status);
 	}
 	return true;
@@ -239,13 +237,12 @@ bool wifi_sta_init(uint32_t wait_sec) {
 
 void wifi_server_init() {
 #if	AP_WIFI_CHANNEL > 11
-	_CHECK(esp_wifi_set_country_code("CN", false));
+	CHECK_(esp_wifi_set_country_code("CN", false));
 #endif
 	//WiFi.softAP(AP_SSID, AP_PASS, AP_WIFI_CHANNEL, SSID_HIDDEN);
 	//WiFi.setTxPower(WIFI_POWER_20dBm); DEBUGLN(WiFi.getTxPower()); //WIFI_POWER_20dBm = 80,// 20dBm
 	//WiFi.softAPbandwidth(WIFI_BW_HT20);
 	//DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());
-	// Handle requests for pages that do not exist
 	server.onNotFound([](AsyncWebServerRequest* request) {
 		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
 		request->send(404, "text/plain", "Not found");
@@ -289,7 +286,7 @@ void wifi_server_init() {
 	ota::server_init(server, ota_progress);
 	log_v("server.begin()");
 	server.begin(); // Start server
-	}
+}
 
 void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
@@ -305,18 +302,18 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "WRONG INPUT");
 		return;
 	}
-	String log; log.reserve(64);
+	String log; log.reserve(128);
 	if (!wrongSSID) {
 		ssid = pSSID->value(); //pSSID->value().length()
-		if (!writeFile(SSID_PATH, ssid)) {
+		/*if (!writeFile(SSID_PATH, ssid)) {
 			log += "ERROR WRITE "; log += SSID_PATH; log += '\n';
-		}
+		}*/
 	}
 	if (!wrongPASS) {
 		pass = pPASS->value();
-		if (!writeFile(PASS_PATH, pass)) {
+		/*if (!writeFile(PASS_PATH, pass)) {
 			log += "ERROR WRITE ";  log += PASS_PATH; log += '\n';
-		}
+		}*/
 	}/////DEBUGf("POST[%s]: %s\n", pSSID->name().c_str(), pSSID->value().c_str(), pPASS->name().c_str(), pPASS->value().c_str());
 	log += "SSID = ["; log += ssid; log += "]\n"; log += "PASS = ["; log += pass; log += "]\n";
 	log += "Done. Connecting with new credentials"; DEBUGLN(log);
@@ -352,7 +349,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = u[tg_apih::date];
 		timestamp_unix = msg.text.toInt(); }break;
 	case SH("/send_alarm"):
-		send_alarm_time(std::move(msg)); return;
+		send_alarm_time(std::move(msg), reinterpret_cast<FastBot2&>(*thisBot)); return;
 	case SH("/clear_alarm"):
 		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file";
 		break;
@@ -363,8 +360,9 @@ void handleMessage(fb::Update& u) {
 		/*case SH("/ota_invalidate"):
 			msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;*/
 	case SH("/timer_count"): {uint64_t count = 0;
-		gptimer_get_raw_count(timer_sab, &count); count /= 1000;
-		msg.text = String(count); } break;
+		gptimer_get_raw_count(timer_sab, &count); 
+		msg.text = String(count /= 1000); } break;
+	case SH("/nvs_erase"): nvs_wifi_erase();break;
 		//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
 	case SH(RELAY_ON):
@@ -446,12 +444,15 @@ esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_
 #endif
 /*		MISC		*/
 void read_credentials() {
-	if (!readFile(SSID_PATH, ssid) || ssid.length() == 0
-		|| !readFile(PASS_PATH, pass) || pass.length() < 8) {
-		log_e("\nERROR READ WIFI LOGIN"); //delay(2000);
-		ssid = DEFAULT_SSID;
-		pass = DEFAULT_PASS;
-	} DEBUGLN(ssid); DEBUGLN(pass);
+	wifi_config_t config;  size_t ssid_l, pass_l;
+	CHECK_RET(esp_wifi_get_config(WIFI_IF_STA, &config)); //esp_wifi_set_config(WIFI_IF_STA, &current_conf)
+	ssid_l = strlen((char*)config.sta.ssid); pass_l = strlen((char*)config.sta.password);
+	if (ssid_l < 1 || pass_l < 8){
+		log_w("ssid len %u, pass len %u", ssid_l, pass_l);
+		memcpy(config.sta.ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
+		memcpy(config.sta.password, DEFAULT_PASS, sizeof(DEFAULT_PASS));
+		CHECK_RET(esp_wifi_set_config(WIFI_IF_STA, &config));
+	}
 }
 
 void get_task_list(String& str) {
@@ -465,7 +466,7 @@ void get_task_list(String& str) {
 
 String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
-	String str; str.reserve(255);
+	String str; str.reserve(300);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
 	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
