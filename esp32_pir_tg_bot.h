@@ -65,7 +65,7 @@
 #define TIMER_CHECK		1'000000
 #define TIMER_RESEND	60 * 1000000ul
 typedef uint32_t _time_t;
-using fb::Message, fb::Fetcher;
+using fb::Message, fb::Fetcher, fb::thisBot;
 
 typedef enum : uint8_t {
 	ok = 0,
@@ -75,8 +75,8 @@ typedef enum : uint8_t {
 	RESEND_MSG,
 	CHECK_MSG,
 	WIFI_DISCONNECT,
-	WIFI_INIT,
 	WIFI_RECON,
+	WIFI_INIT,
 	RESTART,
 	PANIC,
 } stat_t;
@@ -129,15 +129,15 @@ void wifi_server_init();
 bool wifi_sta_init(uint32_t wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
-bool send_alarm_time(Message&& msg, bool no_file = 1);
+bool send_alarm_time(Message&& msg, FastBot2& _bot = bot,bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { /*dWrite(PIN_PULLUP, 1);*/enableInterrupt(PIN_LINE); timer_restart(timer_sab); timer_start(timer_sab); };
-void alarm_off() { /*dWrite(PIN_PULLUP, 0);*/disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
+void alarm_on() { enableInterrupt(PIN_LINE); timer_restart(timer_sab); timer_start(timer_sab); };
+void alarm_off() { disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (*_login.c_str()) {
@@ -169,8 +169,8 @@ struct AutoLed {
 
 bool verifyRollbackLater() { return true; };
 
-esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& result, void* buf, size_t* size = nullptr) {
-	esp_err_t ret = ESP_FAIL; size_t required_size;
+esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& result, void*& buf, size_t* size = nullptr) {
+	esp_err_t ret = ESP_FAIL; size_t required_size; void* ptr;
 	switch (type) {
 	case NVS_TYPE_U8:ret = nvs_get_u8(handle, key, (uint8_t*)&result); break;
 	case NVS_TYPE_I8:ret = nvs_get_i8(handle, key, (int8_t*)&result); break;
@@ -182,30 +182,34 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 	case NVS_TYPE_I64:ret = nvs_get_i64(handle, key, (int64_t*)&result); break;
 	case NVS_TYPE_STR:ret = -2; 
 		nvs_get_str(handle, key, NULL, &required_size);
-		buf = malloc(required_size); if (buf == NULL) return -1; 
-		{ nvs_get_str(handle, key, (char*)buf, &required_size); }
+		ptr = realloc(buf, required_size); 
+		if (ptr == NULL) return -1; buf = ptr;
+		nvs_get_str(handle, key, (char*)buf, &required_size);
 		if (size) *size = required_size;
 		break;
 	case NVS_TYPE_BLOB: ret = -3; 
 		nvs_get_blob(handle, key, NULL, &required_size);
-		buf = malloc(required_size); if (buf == NULL) return -1; 
+		ptr = realloc(buf,required_size); 
+		if (ptr == NULL) return -1; buf = ptr;
 		nvs_get_blob(handle, key, buf, &required_size);
-		if(size)*size = required_size;
+		if (size) *size = required_size;
 		break;
 	}
 	return ret;
 }
 
 void nvs_func() {
-	std::vector<const esp_partition_t*> partArr; nvs_stats_t nvs_stats{}; nvs_handle_t nvs;
-	nvs_iterator_t it = NULL; nvs_entry_info_t entry; esp_err_t err; 
+	esp_err_t err; void* buf = NULL; uint64_t result = 0; size_t _size = 0;
+	nvs_stats_t nvs_stats{}; nvs_handle_t nvs = 0;
+	nvs_iterator_t it = NULL; nvs_entry_info_t entry; 
+	{ std::vector<const esp_partition_t*> partArr;
 	auto i = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
 	while (i != NULL) {
 		partArr.emplace_back(esp_partition_get(i));
 		i = esp_partition_next(i);
 	}log_i("partition count: %u", partArr.size());
 	for (auto& var : partArr) { DEBUGF("Partition label %s, size %u, address 0x%X\n", var->label, var->size, var->address); }
-	esp_partition_iterator_release(i);
+	esp_partition_iterator_release(i); }
 
 	nvs_get_stats(NULL, &nvs_stats);
 	DEBUGF("UsedEntries = (%lu), FreeEntries = (%lu), AvailableEntries = (%lu), AllEntries = (%lu), Namespaces = (%lu)\n",
@@ -216,22 +220,51 @@ void nvs_func() {
 		nvs_entry_info(it, &entry); // Can omit error check if parameters are guaranteed to be non-NULL
 		DEBUGF("space '%s'\tkey '%s'\ttype '%d'", entry.namespace_name, entry.key, entry.type);
 		err = nvs_open(entry.namespace_name, NVS_READONLY, &nvs);
-		if (err != ESP_OK) { log_e("Error (%s) opening NVS handle!", esp_err_to_name(err)); }
+		if (err != ESP_OK) { log_e("Error nvs = 0x%X (%s)", err, esp_err_to_name(err)); }
 		else {
-			std::auto_ptr<void*> str; uint64_t result = 0; size_t _size;
-			switch (nvsGet(nvs, entry.key, entry.type, result, str.get(),&_size)) {
+			switch (nvsGet(nvs, entry.key, entry.type, result, buf, &_size)) {
 			case ESP_OK: DEBUGF("\tData = %llu\n", result); break;
-			case -2: DEBUGF("\nStr: %s\n", (char*)str.get()); break;
+			case -2: DEBUGF("\nStr: %s\n", (char*)buf); break;
 			case -3: DEBUGF("\nBlob (size %u): ", _size);
-				for (size_t i = 0; i < _size; i++) { DEBUGF("%02X ", (char*)(str.get() + i)); }; //
-				DEBUGLN(); break;
+				for (size_t i = 0; i < _size; i++) { DEBUGF("%02X ", ((byte*)buf)[i]); }; DEBUGLN(); break;
+			/*case -2:case -3: DEBUGF("\nBlob (size %u): ", _size);
+				for (size_t i = 0; i < _size; i++) { DEBUG(((char*)buf)[i]); delay(10); }; DEBUGLN(); break;*/
 			default:break;
 			}
 		}
 		err = nvs_entry_next(&it);
 		nvs_close(nvs);
 	}
+	free(buf);
 	nvs_release_iterator(it);
+}
+
+void read_credentials_v() {
+	char ssid[36], pass[65]; size_t ssid_s = sizeof(pass), pass_s = sizeof(pass); nvs_handle_t nvs = 0;
+	CHECK_RET(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_SSID, ssid, &ssid_s));
+	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_PASS, pass, &pass_s));
+	ssid_s = strlen(ssid + 4); pass_s = strlen(pass);
+	if (ssid_s < 1 || pass_s < 8) {
+		log_w("ssid len %u, pass len %u", ssid_s, pass_s);
+		//memcpy(ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
+		//memcpy(pass, DEFAULT_PASS, sizeof(DEFAULT_PASS));
+		CHECK_RET(nvs_set_blob(nvs, NVS_KEY_SSID, DEFAULT_SSID, sizeof(DEFAULT_SSID)));
+		CHECK_RET(nvs_set_blob(nvs, NVS_KEY_PASS, DEFAULT_PASS, sizeof(DEFAULT_PASS)));
+		CHECK_RET(nvs_commit(nvs));
+	}nvs_close(nvs);
+	/*|| esp_wifi_set_config(WIFI_IF_STA, &current_conf) != ESP_OK
+	if (!readFile(SSID_PATH, ssid) || ssid.length() == 0
+		|| !readFile(PASS_PATH, pass) || pass.length() < 8) {
+		log_e("\nERROR READ WIFI LOGIN"); //delay(2000);
+		ssid = DEFAULT_SSID;
+		pass = DEFAULT_PASS;
+	} DEBUGLN(ssid); DEBUGLN(pass);*/
+}
+
+void nvs_wifi_erase(nvs_handle_t nvs = 0) {
+	CHECK_RET(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_erase_all(nvs));
 }
 
 
