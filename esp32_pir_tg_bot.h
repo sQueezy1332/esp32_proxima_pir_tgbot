@@ -5,20 +5,17 @@
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include <MAIN.h>
-#include <FastBot2.h>
+#include <fastbot2.h>
 #include <GyverIO.h>
 #include <SPIFFS.h>
 #include <WiFiClientSecure.h>
 #include <ESPAsyncWebServer.h>
 #include "esp_wifi.h"
 //#include "time.h"
-#include "lwip/apps/sntp.h"
 #ifndef CONFIG_BT_BLE_50_FEATURES_SUPPORTED
 #warning "Not compatible hardware"
 #define NO_BLE
 #endif
-//#include <BLEDevice.h>
-//#include <BLEAdvertising.h>
 #include "OTAserver.h"
 #include "credits.h"
 //#include "BLE_api.h"
@@ -110,7 +107,7 @@ gptimer_handle_t timer_sab = nullptr;
 String ssid, pass, _login, _password;
 AsyncWebServer server(80);
 FastBot2 bot(BOT_TOKEN);
-FastBot2 bot_upd(BOT_TOKEN); 
+FastBot2 bot_upd(BOT_TOKEN);
 #ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
@@ -132,14 +129,14 @@ void wifi_server_init();
 bool wifi_sta_init(uint32_t wait_sec = 5);
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
-bool send_alarm_time(Message && msg, bool no_file = 1);
+bool send_alarm_time(Message&& msg, bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { /*dWrite(PIN_PULLUP, 1);*/enableInterrupt(PIN_LINE); timer_restart(timer_sab);timer_start(timer_sab); };
+void alarm_on() { /*dWrite(PIN_PULLUP, 1);*/enableInterrupt(PIN_LINE); timer_restart(timer_sab); timer_start(timer_sab); };
 void alarm_off() { /*dWrite(PIN_PULLUP, 0);*/disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
@@ -171,6 +168,72 @@ struct AutoLed {
 };
 
 bool verifyRollbackLater() { return true; };
+
+esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& result, void* buf, size_t* size = nullptr) {
+	esp_err_t ret = ESP_FAIL; size_t required_size;
+	switch (type) {
+	case NVS_TYPE_U8:ret = nvs_get_u8(handle, key, (uint8_t*)&result); break;
+	case NVS_TYPE_I8:ret = nvs_get_i8(handle, key, (int8_t*)&result); break;
+	case NVS_TYPE_U16:ret = nvs_get_u16(handle, key, (uint16_t*)&result); break;
+	case NVS_TYPE_I16:ret = nvs_get_i16(handle, key, (int16_t*)&result); break;
+	case NVS_TYPE_U32:ret = nvs_get_u32(handle, key, (uint32_t*)&result); break;
+	case NVS_TYPE_I32:ret = nvs_get_i32(handle, key, (int32_t*)&result); break;
+	case NVS_TYPE_U64:ret = nvs_get_u64(handle, key, &result); break;
+	case NVS_TYPE_I64:ret = nvs_get_i64(handle, key, (int64_t*)&result); break;
+	case NVS_TYPE_STR:ret = -2; 
+		nvs_get_str(handle, key, NULL, &required_size);
+		buf = malloc(required_size);
+		if (buf != NULL) { nvs_get_str(handle, key, (char*)buf, &required_size); }
+		if (size) *size = required_size;
+		break;
+	case NVS_TYPE_BLOB: ret = -3; 
+		nvs_get_blob(handle, key, NULL, &required_size);
+		buf = malloc(required_size);
+		if (buf != NULL) { nvs_get_blob(handle, key, buf, &required_size); }
+		if(size)*size = required_size;
+		break;
+	}
+	return ret;
+}
+
+void nvs_func() {
+	std::vector<const esp_partition_t*> partArr; nvs_stats_t nvs_stats{}; nvs_handle_t nvs;
+	nvs_iterator_t it = NULL; nvs_entry_info_t entry; esp_err_t err; 
+	auto i = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+	while (i != NULL) {
+		partArr.emplace_back(esp_partition_get(i));
+		i = esp_partition_next(i);
+	}log_i("partition count: %u", partArr.size());
+	for (auto& var : partArr) { DEBUGF("Partition label %s, size %u, address 0x%X\n", var->label, var->size, var->address); }
+	esp_partition_iterator_release(i);
+
+	nvs_get_stats(NULL, &nvs_stats);
+	DEBUGF("UsedEntries = (%lu), FreeEntries = (%lu), AvailableEntries = (%lu), AllEntries = (%lu), Namespaces = (%lu)\n",
+		nvs_stats.used_entries, nvs_stats.free_entries, nvs_stats.available_entries, nvs_stats.total_entries, nvs_stats.namespace_count);
+
+	err = nvs_entry_find("nvs",NULL, NVS_TYPE_ANY, &it);
+	while (err == ESP_OK) {
+		nvs_entry_info(it, &entry); // Can omit error check if parameters are guaranteed to be non-NULL
+		DEBUGF("space '%s'\tkey '%s'\ttype '%d'", entry.namespace_name, entry.key, entry.type);
+		err = nvs_open(entry.namespace_name, NVS_READONLY, &nvs);
+		if (err != ESP_OK) { log_e("Error (%s) opening NVS handle!", esp_err_to_name(err)); }
+		else {
+			std::auto_ptr<void*> str; uint64_t result = 0; size_t _size;
+			switch (nvsGet(nvs, entry.key, entry.type, result, str.get(),&_size)) {
+			case ESP_OK: DEBUGF("\tData = %llu\n", result); break;
+			case -2: DEBUGF("\nStr: %s\n", (char*)str.get()); break;
+			case -3: DEBUGF("\nBlob (size %u): ", _size);
+				for (size_t i = 0; i < _size; i++) { DEBUGF("%02X ", (char*)(str.get() + i)); }; //
+				DEBUGLN(); break;
+			default:break;
+			}
+		}
+		err = nvs_entry_next(&it);
+		nvs_close(nvs);
+	}
+	nvs_release_iterator(it);
+}
+
 
 static void IRAM_ATTR interrupt_handler_s() {
 	static byte counter = 0; static int last_alarm_delta = -1;
