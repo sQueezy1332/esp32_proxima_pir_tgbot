@@ -18,6 +18,9 @@
 #define AP_PASS ""
 #define WIFI_CHANNEL 13
 #define CHANGE_AUTH ""
+#define NVS_NAMESPACE "nvs.net80211"
+#define NVS_KEY_SSID "sta.ssid"
+#define NVS_KEY_PASS "sta.pswd"
 
 #define BLE_SET "/ble_set"
 #define RELAY_ON "/relay_on"
