@@ -182,14 +182,14 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 	case NVS_TYPE_I64:ret = nvs_get_i64(handle, key, (int64_t*)&result); break;
 	case NVS_TYPE_STR:ret = -2; 
 		nvs_get_str(handle, key, NULL, &required_size);
-		buf = malloc(required_size);
-		if (buf != NULL) { nvs_get_str(handle, key, (char*)buf, &required_size); }
+		buf = malloc(required_size); if (buf == NULL) return -1; 
+		{ nvs_get_str(handle, key, (char*)buf, &required_size); }
 		if (size) *size = required_size;
 		break;
 	case NVS_TYPE_BLOB: ret = -3; 
 		nvs_get_blob(handle, key, NULL, &required_size);
-		buf = malloc(required_size);
-		if (buf != NULL) { nvs_get_blob(handle, key, buf, &required_size); }
+		buf = malloc(required_size); if (buf == NULL) return -1; 
+		nvs_get_blob(handle, key, buf, &required_size);
 		if(size)*size = required_size;
 		break;
 	}
