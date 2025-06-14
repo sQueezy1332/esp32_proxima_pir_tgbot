@@ -1,5 +1,5 @@
 #pragma once
-#define CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT 1
+//#define CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT 1
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
@@ -30,7 +30,7 @@ bool btInUse() { return false; }
 #endif
 #include "chip-debug-report.h"
 
-#if ARDUINO_USB_CDC_ON_BOOT || (defined CONFIG_IDF_TARGET_ESP32 && ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR)
+#if /*ARDUINO_USB_CDC_ON_BOOT && */(/*defined CONFIG_IDF_TARGET_ESP32 && */ARDUHAL_LOG_LEVEL > ARDUHAL_LOG_LEVEL_ERROR)
 #define DEBUG_ENABLE
 #endif
 //#define DEBUG_ENABLE
@@ -39,13 +39,16 @@ bool btInUse() { return false; }
 #define DEBUG(x, ...) Serial.print(x, ##__VA_ARGS__)
 #define DEBUGLN(x, ...) Serial.println(x, ##__VA_ARGS__)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
-#define _CHECK(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
+#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x);
+#define CHECK_RET(x) do {esp_err_t ret = (x);\
+        if (unlikely(ret != ESP_OK)) { log_e(" 0x%X\t(%s)", ret,  esp_err_to_name(ret)); return;} }while(0)//ESP_RETURN_VOID_ON_ERROR(%s)", err, 
 #else
 #define DEBUG(x)
 #define DEBUGLN(x) 
 #define DEBUGF(x, ...)
 #define NDEBUG
-#define _CHECK(x) (void)(x);
+#define CHECK_(x) (void)(x);
+#define CHECK_RET(x) do {esp_err_t ret = (x); if (unlikely(ret != ESP_OK)) {return;} }while(0)
 #endif // DEBUG_ENABLE
 #define uS esp_timer_get_time()
 #define delayms(x) vTaskDelay((x) / portTICK_PERIOD_MS)
@@ -64,7 +67,7 @@ void nvs_init() {
 		const esp_partition_t* partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
 		if (partition != NULL) {
 			err = esp_partition_erase_range(partition, 0, partition->size);
-			if (err != ESP_OK) err = nvs_flash_init();
+			if (err != ESP_OK) { err = nvs_flash_init(); log_d("nvs_flash_init"); }
 			else log_e("Failed to format the broken NVS partition!");
 		}
 		else log_e("Could not find NVS partition");
@@ -116,8 +119,7 @@ void main_init() {
 	nvs_init();
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
 #if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
-	if (!btInUse())
-	{
+	if (!btInUse()) {
 		auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret);
 	}
 #endif
@@ -126,7 +128,7 @@ void main_init() {
 #endif
 }
 
-#ifdef  __cplusplus
+#ifndef  __cplusplus
 extern "C" {
 #endif //  __cplusplus
 	esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 1) {
@@ -153,10 +155,10 @@ extern "C" {
 			|| (ret = timer_alarm(value, handle, reload)))
 			goto exit;
 		if (start) ret = gptimer_start(handle);
-	exit:log_v("ret = %u", ret);
+	exit:log_v("ret = %i", ret);
 		return ret;
 	}
-#ifdef  __cplusplus
+#ifndef  __cplusplus
 }
 #endif //  __cplusplus
 
@@ -171,15 +173,12 @@ void pinMode(uint8_t pin, uint8_t mode) {
 		.intr_type = GPIO_INTR_DISABLE,
 		//(gpio_int_type_t)gpiohal.dev->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
 	};  //io
-	if (mode & OPEN_DRAIN) {
+	if (mode & OPEN_DRAIN)
 		conf.mode = (gpio_mode_t)((int)conf.mode | GPIO_MODE_DEF_OD);
-	}
-	if (mode & PULLUP) {
+	if (mode & PULLUP)
 		conf.pull_up_en = GPIO_PULLUP_ENABLE;
-	}
-	if (mode & PULLDOWN) {
+	if (mode & PULLDOWN)
 		conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-	}
 	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
 
