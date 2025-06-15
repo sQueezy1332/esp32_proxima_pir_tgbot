@@ -5,26 +5,27 @@
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include <MAIN.h>
-#include <fastbot2.h>
+#include <FastBot2.h>
 #include <GyverIO.h>
 #include <SPIFFS.h>
 #include <WiFiClientSecure.h>
 #include <ESPAsyncWebServer.h>
 #include "esp_wifi.h"
+#include "rom/crc.h"
 //#include "time.h"
 #ifndef CONFIG_BT_BLE_50_FEATURES_SUPPORTED
 #warning "Not compatible hardware"
 #define NO_BLE
 #endif
 #include "OTAserver.h"
-#include "credits.h"
+#include "credentials.h"
 //#include "BLE_api.h"
 
 #define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_RELAY 8
+#define PIN_RELAY PIN_BUTTON
 #if defined ESP32C3_LUATOS
 #define PIN_LINE 5
 #define PIN_PULLUP 4
@@ -51,6 +52,7 @@
 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
 #define SEND_TASK_STACK_SIZE (8 * 1024)
+#define SAB_TASK_STACK_SIZE (2*1024)
 #define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
 #define QUEUE_LEN 32
 
@@ -60,10 +62,7 @@
 #define uS esp_timer_get_time()
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
-#define TIMER_RECONNECT	60 * 60 * 1000000ul
 #define TIMER_SABOTAGE	2500'000
-#define TIMER_CHECK		1'000000
-#define TIMER_RESEND	60 * 1000000ul
 typedef uint32_t _time_t;
 using fb::Message, fb::Fetcher, fb::thisBot;
 
@@ -82,29 +81,36 @@ typedef enum : uint8_t {
 } stat_t;
 
 typedef struct /*__attribute__((packed))*/ {
-	stat_t status;
-	byte counter;
-	uint16_t delta;
+	stat_t status; byte counter; uint16_t delta;
 } tgMsg_t;
 
-StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
-StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
-TaskHandle_t loopTaskHandle, sendTaskHandle;	//task
+typedef struct {
+	unsigned alarm : 1, reserved : 23; byte crc;
+} sets_t;
+
+typedef struct {
+	String ssid,pass;
+} auth_t;
+
+//const uint32_t _x = 0xDEADBEEF;
+
+StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE], xSabStack[SAB_TASK_STACK_SIZE];
+StaticTask_t xMainTaskBuffer, xSendTaskBuffer, xSabTaskBuffer;
+TaskHandle_t loopTaskHandle, sendTaskHandle, sabTaskHandle;	//task
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticQueue_t pxStaticQueue;
 QueueHandle_t QueueMsgHandle;	//queue
-//StaticSemaphore_t xMutexBuffer;
-//SemaphoreHandle_t mutex; // mutex
+__attribute__((unused)) gptimer_handle_t timer_sab;
 
 stat_t Flag = ok;
+sets_t sets;
 __attribute__((unused)) stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
-volatile uint32_t interrupt_delta = 0;
+__attribute__((unused)) volatile uint32_t interrupt_delta;
 _time_t timestamp_unix;
 uint64_t time_sync_unix;
-network_event_handle_t event_id = 0;
-gptimer_handle_t timer_sab = nullptr;
-String ssid, pass, _login, _password;
+network_event_handle_t event_id;
+auth_t* Auth = nullptr;
 AsyncWebServer server(80);
 FastBot2 bot(BOT_TOKEN);
 FastBot2 bot_upd(BOT_TOKEN);
@@ -114,6 +120,7 @@ byte ble_data_size = 0;
 #endif
 void mainTask(void*);
 void sendTask(void*);
+void sabotageTask(void*);
 static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
@@ -127,21 +134,24 @@ void get_task_list(String& str);
 String get_info(bool ver = false);
 void wifi_server_init();
 bool wifi_sta_init(uint32_t wait_sec = 5);
+bool wifi_ap_init();
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
-bool send_alarm_time(Message&& msg, FastBot2& _bot = bot,bool no_file = 1);
+bool send_alarm_time(Message&& msg = Message("", CHAT_ID), FastBot2& _bot = bot, bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
-void alarm_on() { enableInterrupt(PIN_LINE); timer_restart(timer_sab); timer_start(timer_sab); };
-void alarm_off() { disableInterrupt(PIN_LINE); timer_stop(timer_sab); };
+void nvs_read_sets();
+void nvs_write_sets(nvs_handle_t nvs = 0);
+void alarm_on(bool write = true);
+void alarm_off(bool write = true);
 void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
-	if (*_login.c_str()) {
-		if (!request->authenticate(_login.c_str(), _password.c_str())) {
+	if (Auth) {
+		if (!request->authenticate(Auth->ssid.c_str(), Auth->pass.c_str())) {
 			request->requestAuthentication();
 			return false;
 		}
@@ -159,10 +169,10 @@ void ota_progress(size_t progress, size_t size) {
 	}
 }
 
-template<byte PIN>
+template<byte PIN, bool state = LED_ON>
 struct AutoLed {
-	AutoLed() { dWrite(PIN, LED_ON); };
-	~AutoLed() { dWrite(PIN, LED_OFF); };
+	AutoLed() { dWrite(PIN, state); };
+	~AutoLed() { dWrite(PIN, !state); };
 	AutoLed(const AutoLed&) = delete;
 	AutoLed& operator=(const AutoLed&) = delete;
 };
@@ -180,16 +190,16 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 	case NVS_TYPE_I32:ret = nvs_get_i32(handle, key, (int32_t*)&result); break;
 	case NVS_TYPE_U64:ret = nvs_get_u64(handle, key, &result); break;
 	case NVS_TYPE_I64:ret = nvs_get_i64(handle, key, (int64_t*)&result); break;
-	case NVS_TYPE_STR:ret = -2; 
+	case NVS_TYPE_STR:ret = -2;
 		nvs_get_str(handle, key, NULL, &required_size);
-		ptr = realloc(buf, required_size); 
+		ptr = realloc(buf, required_size);
 		if (ptr == NULL) return -1; buf = ptr;
 		nvs_get_str(handle, key, (char*)buf, &required_size);
 		if (size) *size = required_size;
 		break;
-	case NVS_TYPE_BLOB: ret = -3; 
+	case NVS_TYPE_BLOB: ret = -3;
 		nvs_get_blob(handle, key, NULL, &required_size);
-		ptr = realloc(buf,required_size); 
+		ptr = realloc(buf, required_size);
 		if (ptr == NULL) return -1; buf = ptr;
 		nvs_get_blob(handle, key, buf, &required_size);
 		if (size) *size = required_size;
@@ -201,7 +211,7 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 void nvs_func() {
 	esp_err_t err; void* buf = NULL; uint64_t result = 0; size_t _size = 0;
 	nvs_stats_t nvs_stats{}; nvs_handle_t nvs = 0;
-	nvs_iterator_t it = NULL; nvs_entry_info_t entry; 
+	nvs_iterator_t it = NULL; nvs_entry_info_t entry;
 	{ std::vector<const esp_partition_t*> partArr;
 	auto i = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
 	while (i != NULL) {
@@ -215,7 +225,7 @@ void nvs_func() {
 	DEBUGF("UsedEntries = (%lu), FreeEntries = (%lu), AvailableEntries = (%lu), AllEntries = (%lu), Namespaces = (%lu)\n",
 		nvs_stats.used_entries, nvs_stats.free_entries, nvs_stats.available_entries, nvs_stats.total_entries, nvs_stats.namespace_count);
 
-	err = nvs_entry_find("nvs",NULL, NVS_TYPE_ANY, &it);
+	err = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY, &it);
 	while (err == ESP_OK) {
 		nvs_entry_info(it, &entry); // Can omit error check if parameters are guaranteed to be non-NULL
 		DEBUGF("space '%s'\tkey '%s'\ttype '%d'", entry.namespace_name, entry.key, entry.type);
@@ -227,8 +237,8 @@ void nvs_func() {
 			case -2: DEBUGF("\nStr: %s\n", (char*)buf); break;
 			case -3: DEBUGF("\nBlob (size %u): ", _size);
 				for (size_t i = 0; i < _size; i++) { DEBUGF("%02X ", ((byte*)buf)[i]); }; DEBUGLN(); break;
-			/*case -2:case -3: DEBUGF("\nBlob (size %u): ", _size);
-				for (size_t i = 0; i < _size; i++) { DEBUG(((char*)buf)[i]); delay(10); }; DEBUGLN(); break;*/
+				/*case -2:case -3: DEBUGF("\nBlob (size %u): ", _size);
+					for (size_t i = 0; i < _size; i++) { DEBUG(((char*)buf)[i]); delay(10); }; DEBUGLN(); break;*/
 			default:break;
 			}
 		}
@@ -294,66 +304,3 @@ static void IRAM_ATTR interrupt_handler_s() {
 	last_alarm_delta = ok;
 #endif
 }
-
-//void ble_advertising() {
-//	BLEMultiAdvertising advert(1);
-//	BLEDevice::init("");
-//	advert.setAdvertisingParams(3, &ext_adv_params_coded);
-//	advert.setDuration(3);
-//	advert.setScanRspData(3, sizeof(raw_scan_rsp_data_coded), &raw_scan_rsp_data_coded[0]);
-//	advert.setInstanceAddress(3, addr_coded);
-//	auto pBLEScan = BLEDevice::getScan();  //create new scan
-//	pBLEScan->setExtendedScanCallback(new MyBLEExtAdvertisingCallbacks());
-//	pBLEScan->setExtScanParams();         // use with pre-defined/default values, overloaded function allows to pass parameters
-//	delay(1000);                          // it is just for simplicity this example, to let ble stack to set extended scan params
-//	pBLEScan->startExtScan(100, 3);  // scan duration in n * 10ms, period - repeat after n seconds (period >= duration)
-//}
-
-void IRAM_ATTR timebench() {
-	uint64_t start, end; uint64_t count = 0; //gptimer_get_captured_count(timer_sab, &count);
-	ENTER_CRITICAL()
-		start = uS;
-	//gptimer_get_raw_count(timer_sab, &count);
-	end = uS;
-	EXIT_CRITICAL()
-		log_d("delta = %llu", end - start);
-}
-
-void suicide_func() {
-	//extern StackType_t* shitstack;
-	uint32_t rnd = random(0x3FFAE000, 0x400B8000);
-	DEBUGF("address = 0x%X, value = %X\n", rnd, ESP_REG(rnd)); delay(5);
-	ESP_REG(rnd) = 0;
-	auto lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit";
-	char* strtmp = (char*)malloc(56); memcpy(strtmp, lorem, 56); strtmp[55] = 0;
-	uint32_t addrstr = (uint32_t)strtmp;
-	DEBUGF("address strtmp = 0x%X\n", addrstr);
-	char* newptrstr = (char*)(addrstr);
-	for (size_t i = 0; i < 55; i++) { newptrstr[i] = 'A' + i; }
-	DEBUGLN(newptrstr);
-	free(newptrstr); DEBUGLN(newptrstr);
-	for (size_t i = 0; i < sizeof(xMainStack); i++) {
-		DEBUGF("%c", xMainStack[i]); DEBUG(' '); if ((i & 7) == 0) DEBUG('\n');
-		xMainStack[i] = 0;
-	}
-}
-
-
-
-void suicide_func2(void*) {
-	extern StackType_t* shitstack;
-	memset(xMainStack, 0xFF, 8192); dWrite(PIN_LED, LED_ON);
-	DEBUGLN("memset");/* free(shitstack);*/ vTaskDelete(NULL); return;
-	//Guru Meditation Error : Core  0 panic'ed (Instruction access fault). Exception was unhandled.
-	for (size_t i = 8192 / 4; i; --i) {
-		DEBUGF("%02X", ((uint32_t*)&shitstack)[i]); DEBUG(' '); if ((i & 7) == 0) DEBUG('\n');
-		((uint32_t*)&shitstack)[i] = 0;
-	}
-	DEBUGLN("LOL"); //***ERROR*** A stack overflow in task esp_timer has been detected.
-	vTaskDelete(NULL);
-}
-
-//static void timerAlarm(uint64_t value, stat_t flag, gptimer_handle_t& handle) {
-//	timer_restart(handle); timer_alarm(value, handle);
-//	Flag = flag;
-//}
