@@ -4,7 +4,7 @@ extern "C" void app_main() {
 	main_init();//nvs_func();
 	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
 	pinMode(PIN_LED, OUTPUT); pinMode(PIN_BUTTON, OPEN_DRAIN); dWrite(PIN_BUTTON, 1);//pinMode(PIN_RELAY, OUTPUT);
-	//AutoLed<PIN_LED> led;
+	AutoLed<PIN_LED> led;
 	//CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
 	sabTaskHandle = xTaskCreateStatic(sabotageTask, "sabotage", sizeof(xSabStack), NULL, 1, xSabStack, &xSabTaskBuffer);
@@ -16,7 +16,7 @@ extern "C" void app_main() {
 	read_credentials(); 
 	if (!wifi_sta_init()) { WiFi.begin(DEFAULT_SSID, DEFAULT_PASS); if (!wifi_sta_init()) wifi_ap_init(); };
 #ifdef DEBUG_ENABLE
-	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
+	WiFi.printDiag(Serial); //log_d("%u ", sizeof(QueueMsgStorage));
 #endif 
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot_upd.attachUpdate(updateHandler);
@@ -26,7 +26,7 @@ extern "C" void app_main() {
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	bot_upd.sendMessage(Message(get_info(true), CHAT_ID));
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL)); vTaskDelete(NULL);
+	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL)); //vTaskDelete(NULL);
 }
 
 void mainTask(void*) {
