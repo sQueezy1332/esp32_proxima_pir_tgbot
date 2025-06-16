@@ -95,10 +95,10 @@ StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
 StaticQueue_t xStaticQueue;
-StaticTimer_t xTimerBuffer;
+StaticTimer_t xTimerSabBuffer, xTimerIntrBuffer;
 TaskHandle_t loopTaskHandle, sendTaskHandle;
 QueueHandle_t QueueMsgHandle;
-TimerHandle_t timerSab;
+TimerHandle_t timerSabotage, timerInterrupt;
 __attribute__((unused)) gptimer_handle_t timer_sab;
 
 stat_t Flag = ok;
@@ -173,7 +173,7 @@ void pir_reset() {
 		pinMode(PIN_LINE, INPUT_PULLUP); xTimerDelete(xTimer, 0);
 	};
 	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3); pinMode(PIN_LINE, OUTPUT); dWrite(PIN_LINE, 0);
-	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(30 * 1000), pdFALSE, NULL, lambda), 0);
+	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(60 * 1000), pdFALSE, NULL, lambda), 0);
 };
 
 template<byte PIN, bool state = LED_ON>
