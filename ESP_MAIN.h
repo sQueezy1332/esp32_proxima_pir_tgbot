@@ -30,7 +30,7 @@ bool btInUse() { return false; }
 #endif
 #include "chip-debug-report.h"
 
-#if /*ARDUINO_USB_CDC_ON_BOOT && */(/*defined CONFIG_IDF_TARGET_ESP32 && */ARDUHAL_LOG_LEVEL > ARDUHAL_LOG_LEVEL_ERROR)
+#if ARDUINO_USB_CDC_ON_BOOT || (defined CONFIG_IDF_TARGET_ESP32 && ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG)
 #define DEBUG_ENABLE
 #endif
 //#define DEBUG_ENABLE
@@ -120,7 +120,7 @@ void main_init() {
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
 #if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
 	if (!btInUse()) {
-		auto ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret);
+		esp_err_t ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret);
 	}
 #endif
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
@@ -128,57 +128,43 @@ void main_init() {
 #endif
 }
 
-#ifndef  __cplusplus
-extern "C" {
-#endif //  __cplusplus
-	esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 1) {
-		gptimer_alarm_config_t alarm_config{
+esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 1, uint64_t count = 0) {
+		static gptimer_alarm_config_t alarm_config{
 			.alarm_count = value,
-			.reload_count = 0,
+			.reload_count = count,
 			.flags = {.auto_reload_on_alarm = reload} //.flags.auto_reload_on_alarm = reload,
 		};
 		return gptimer_set_alarm_action(handle, &alarm_config);
 	}
-	esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func, bool start = 1, bool reload = 1, uint8_t prio = 1) {
+esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func,
+	bool start = 1, bool reload = 1, uint64_t count = 0) {
 		esp_err_t ret = ESP_OK;
 		gptimer_config_t config{
 			.clk_src = GPTIMER_CLK_SRC_DEFAULT,
 			.direction = GPTIMER_COUNT_UP,
 			.resolution_hz = 1000000,
-			.intr_priority = prio,
 			.flags = {.intr_shared = 1, },
 		}; //SOC_TIMER_GROUP_TOTAL_TIMERS
 		gptimer_event_callbacks_t cbs = { .on_alarm = func };
 		if ((ret = gptimer_new_timer(&config, &handle))
 			|| (ret = gptimer_register_event_callbacks(handle, &cbs, NULL))
 			|| (ret = gptimer_enable(handle))
-			|| (ret = timer_alarm(value, handle, reload)))
+			|| (ret = timer_alarm(value, handle, reload, count)))
 			goto exit;
 		if (start) ret = gptimer_start(handle);
 	exit:log_v("ret = %i", ret);
 		return ret;
 	}
-#ifndef  __cplusplus
-}
-#endif //  __cplusplus
 
 void pinMode(uint8_t pin, uint8_t mode) {
 	if (mode >= 32) { log_d("pinMode(%u, %u)", pin, mode); return; }
-	//gpio_hal_context_t gpiohal{ .dev = GPIO_LL_GET_HW(GPIO_PORT_0) };
 	gpio_config_t conf = {
-	.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
-		.mode = gpio_mode_t(mode & (INPUT | OUTPUT)),	/*!< GPIO mode: set input/output mode                     */
-		.pull_up_en = GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
-		.pull_down_en = GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
-		.intr_type = GPIO_INTR_DISABLE,
-		//(gpio_int_type_t)gpiohal.dev->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
-	};  //io
-	if (mode & OPEN_DRAIN)
-		conf.mode = (gpio_mode_t)((int)conf.mode | GPIO_MODE_DEF_OD);
-	if (mode & PULLUP)
-		conf.pull_up_en = GPIO_PULLUP_ENABLE;
-	if (mode & PULLDOWN)
-		conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+		.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
+		.mode = mode & OPEN_DRAIN ? GPIO_MODE_INPUT_OUTPUT_OD : GPIO_MODE_INPUT_OUTPUT ,	/*!< GPIO mode: set input/output mode                     */
+		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
+		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
+		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
+	};
 	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
 
