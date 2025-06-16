@@ -5,18 +5,17 @@ extern "C" void app_main() {
 	pinMode(PIN_LINE, INPUT_PULLUP); //pinMode(PIN_PULLUP, OUTPUT); dWrite(PIN_PULLUP, 1);
 	pinMode(PIN_LED, OUTPUT); pinMode(PIN_BUTTON, OPEN_DRAIN); dWrite(PIN_BUTTON, 1);//pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led;
-	//CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
-	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &pxStaticQueue);
-	sabTaskHandle = xTaskCreateStatic(sabotageTask, "sabotage", sizeof(xSabStack), NULL, 1, xSabStack, &xSabTaskBuffer);
-	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
+	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
+	timerSab = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE), pdFALSE, NULL, sabotageCallback, &xTimerBuffer); //CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
+	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE); //xTimerStart(timerSab, 0);
 	nvs_read_sets();
-	if (!SPIFFS.begin()) DEBUGLN("\nAn error has occurred while mounting SPIFFS");
+	if (!SPIFFS.begin()) DEBUGLN("\nError while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_STA);
-	wifi_server_init();
-	read_credentials(); 
+	//wifi_server_init();
+	read_credentials();
 	if (!wifi_sta_init()) { WiFi.begin(DEFAULT_SSID, DEFAULT_PASS); if (!wifi_sta_init()) wifi_ap_init(); };
 #ifdef DEBUG_ENABLE
-	WiFi.printDiag(Serial); //log_d("%u ", sizeof(QueueMsgStorage));
+	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
 #endif 
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot_upd.attachUpdate(updateHandler);
@@ -26,7 +25,7 @@ extern "C" void app_main() {
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 10, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	bot_upd.sendMessage(Message(get_info(true), CHAT_ID));
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL)); //vTaskDelete(NULL);
+	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void mainTask(void*) {
@@ -40,12 +39,12 @@ void mainTask(void*) {
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(300)); continue;
 		case WIFI_DISCONNECT: time_sync(); WiFi.disconnect();
 			vTaskDelayUntil(&tick, pdMS_TO_TICKS(60 * 60 * 1000));
-		case WIFI_RECON: if (wifi_sta_init()) { bot.tickManual(); } continue;
-		case WIFI_INIT: WiFi.begin(Auth->ssid, Auth->pass); 
+		case WIFI_RECON: if (wifi_sta_init()) { bot_upd.tickManual(); } continue;
+		case WIFI_INIT: WiFi.begin(Auth->ssid, Auth->pass);
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: bot_upd.tickManual(); yield(); esp_restart();
-		default: delay(1000); Flag = CHECK_MSG;
+		default: delay(500); Flag = CHECK_MSG;
 		}
 	}
 }
@@ -54,7 +53,7 @@ void sendTask(void*) {
 	Message msg("", CHAT_ID); tgMsg_t event; //sizeof(FastBot2);
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
-			AutoLed<PIN_LED> led;
+			AutoLed<PIN_LED> led; enableInterrupt(PIN_LINE);
 			if (wifi_sta_init()) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
@@ -84,21 +83,6 @@ void sendTask(void*) {
 	}
 }
 
-void sabotageTask(void*) {
-	uint64_t time, last; uint32_t delta; tgMsg_t tmp;
-	for (;;) {
-		delay(TIMER_SABOTAGE / 1000);
-		if (last_state > ALARM) continue;
-		time = uS; last = last_interrupt;
-		delta = time - last;
-		if (delta > TIMER_SABOTAGE) {
-			last_state = tmp.status = lineRead ? LINE_HIGH : LINE_LOW;
-			tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta);//log_d("%u", delta);
-			xQueueSend(QueueMsgHandle, &tmp, 0);
-		}
-	}
-}
-
 void time_sync(uint32_t wait_sec) {
 	DEBUG("Time sync "); if (!WiFi.isConnected()) return;
 	time_t temp = 0; wait_sec *= 10;
@@ -117,37 +101,34 @@ void time_sync(uint32_t wait_sec) {
 /*		INTERRUPTS		*/
 static void IRAM_ATTR isr_handler(/*void**/) {
 	if (lineRead) return;
+	xTimerResetFromISR(timerSab, NULL);
 	uint64_t time = uS; //timer_restart(timer_sab); 
 	uint32_t delta = time - last_interrupt; tgMsg_t tmp;
 	last_interrupt = time; //interrupt_delta = delta; 
 	if (delta < 2400000 /*&& delta > 10000*/)
-//#ifdef DEBUG_ENABLE
-	{ last_state = tmp.status = ALARM; }
+#ifndef DEBUG_ENABLE
+	{
+		last_state = tmp.status = ALARM; if (delta < 10000) disableInterrupt(PIN_LINE);
+	}
 	else if (last_state == ok) return;
-	else { last_state = tmp.status = ok; }
-	isr_log_d("%u", tmp.status);
-//#else
-	//{ tmp.status = ALARM; } else return;
-//#endif // DEBUG_ENABLE
+	else { last_state = tmp.status = ok; } //isr_log_d("%u", tmp.status);
+#else
+	{ tmp.status = ALARM; }
+	else return;
+#endif 
 	tmp.delta = (uint16_t)(delta / 1000);
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);//sizeof(tgMsg_t)
+	xQueueSendFromISR(QueueMsgHandle, &tmp, NULL);//sizeof(tgMsg_t)
 }
 
-static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	uint32_t delta = edata->count_value / 1000;
-	tgMsg_t tmp{
-		.status = lineRead ? LINE_HIGH : LINE_LOW,
-		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
-	};
-//#ifdef DEBUG_ENABLE
-	last_state = tmp.status;
-//#endif // DEBUG_ENABLE
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
-	return false;
+void sabotageCallback(TimerHandle_t xTimer) {
+	uint64_t time = uS, last = last_interrupt; uint32_t delta = time - last; tgMsg_t tmp;//if (last_state > ALARM) return;
+	last_state = tmp.status = lineRead ? LINE_HIGH : LINE_LOW;
+	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
+	xQueueSend(QueueMsgHandle, &tmp, 0);
 }
 /*		FILE SYSTEM	*/
 bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
-	DEBUG("Reading file: "); DEBUGLN(ALARM_PATH); //sizeof(Message);108
+	DEBUG("Reading file: "); DEBUG(ALARM_PATH); //sizeof(Message);108
 	String& str = msg.text; File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
@@ -163,7 +144,7 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 		goto try_send;
 	}//ptr = str.begin();
 	for (offset = 0; offset < str_len && file.available();) {
-		file.read((byte*)&timestamp, sizeof(_time_t)); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
+		file.read((byte*)&timestamp, sizeof(_time_t)); //DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
 		//localtime_r(&timestamp, &timeinfo); 
 		////DEBUGLN(ctime(&timestamp));
 		//strftime(&ptr[offset], 9, "%H:%M:%S", &timeinfo);
@@ -258,6 +239,7 @@ bool wifi_ap_init() {
 }
 
 void wifi_server_init() {
+	__weak_symbol extern AsyncWebServer server;
 	server.onNotFound([](AsyncWebServerRequest* request) {
 		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
 		request->send(404, "text/plain", "Not found");
@@ -313,8 +295,8 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 	if (wrongSSID || wrongPASS) {
 		request->send(200, "text/plain", "WRONG INPUT"); return;
 	}
-	delete Auth; 
-	Auth = new auth_t {
+	delete Auth;
+	Auth = new auth_t{
 		.ssid = pSSID->value(),
 		.pass = pPASS->value()
 	};//sizeof(auth_t)
@@ -330,43 +312,37 @@ void handleMessage(fb::Update& u) {
 	Message msg; msg.chatID = u.message().chat().id(); DEBUGLN(u.message().text());
 	switch (u.message().text().hash()) {
 	case SH("/connect"):
-		msg.text = "ESP will stay connected";
-		Flag = CHECK_MSG; break;
+		Flag = CHECK_MSG; msg.text = "ESP will stay connected"; break;
 	case SH("/disconnect"):
-		msg.text = "Disconnecting...";
-		Flag = WIFI_DISCONNECT; break;
+		Flag = WIFI_DISCONNECT; msg.text = "Disconnecting..."; break;
 	case SH("/alarm_on"):
-		msg.text = "Alarm on";
-		alarm_on(); break;
+		alarm_on(); msg.text = "Alarm on"; break;
 	case SH("/alarm_off"):
-		msg.text = "Alarm off"; 
-		alarm_off(); break;
+		alarm_off(); msg.text = "Alarm off"; break;
 	case SH("/info"):
-		msg.text = std::move(get_info());
-		break;
+		msg.text = std::move(get_info()); break;
 	case SH("/task_list"):
 		get_task_list(msg.text); break;
 	case SH("/restart"):
-		msg.text = "ESP restarting...";
-		bot.reboot(); Flag = RESTART; break;
-	case SH("/time_sync"): {
-		time_sync_unix = uS;
-		msg.text = u[tg_apih::date];
-		timestamp_unix = msg.text.toInt(); }break;
+		bot.reboot(); Flag = RESTART; msg.text = "ESP restarting..."; break;
+	case SH("/time_sync"):
+		time_sync_unix = uS; msg.text = u[tg_apih::date];
+		timestamp_unix = msg.text.toInt(); msg.text = "Done"; break;
 	case SH("/send_alarm"):
 		send_alarm_time(std::move(msg), bot_upd); return;
 	case SH("/clear_alarm"):
-		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file";
-		break;
+		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file"; break;
 	case SH("/valid"):
 		msg.text = (int)img_state(true); break;
 	case SH("/invalid"): esp_ota_mark_app_invalid_rollback_and_reboot(); return;
-	//case SH("/const"): {const_cast<uint32_t&>(_x) = 0xAAAAAAAA; msg.text = String(_x, HEX); } break;
-	//case SH("/ota_invalidate"):
-	//msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
-	//case SH("/timer_count"): {uint64_t count = 0; gptimer_get_raw_count(timer_sab, &count);msg.text = String(count /= 1000); } break;
-	//case SH("/nvs_erase"): nvs_wifi_erase(); break;
-	//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
+	case SH("/pir_reset"):
+		 pir_reset(); msg.text = "Done"; break;
+	case SH("/bot_kill"): {memset(reinterpret_cast<void*>(&bot), 0x0, sizeof(bot)); } break;
+		//case SH("/ota_invalidate"):
+		//msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
+		//case SH("/timer_count"): {uint64_t count = 0; gptimer_get_raw_count(timer_sab, &count);msg.text = String(count /= 1000); } break;
+		//case SH("/nvs_erase"): nvs_wifi_erase(); break;
+		//case SH("/suicide")://suicide_func(); xTaskCreate(suicide_func2, "HUY", 2048, NULL, 6, NULL); break;
 #if defined RELAY
 	case SH(RELAY_ON):
 		dWrite(PIN_RELAY, HIGH); msg.text = "RELAY ON"; break;
@@ -389,8 +365,7 @@ void handleMessage(fb::Update& u) {
 	case SH("/ble_clear"):
 		free(ble_data); ble_data = nullptr; ble_data_size = 0;
 		msg.text = "Done"; break;
-	case SH("/ble_deinit"):
-		break;
+	case SH("/ble_deinit"): break;
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
@@ -415,7 +390,7 @@ void handleDocument(fb::Update& u) {
 	}
 }
 
-void otaBegin(fb::Update& u, bool(Fetcher::* fun)()) {
+void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
 	AutoLed<PIN_LED> led; alarm_off();
 	vTaskSuspend(sendTaskHandle);
 	auto ptr = esp_ota_get_next_update_partition(NULL);
@@ -424,7 +399,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* fun)()) {
 	bot_upd.sendMessage(msg);
 	Fetcher fetch = bot_upd.downloadFile(u.message().document().id());
 	if (fetch) {
-		if ((fetch.*fun)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
+		if ((fetch.*updater)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
 		else { msg.text = "Error"; }
 	}
 	else { msg.text = "Download error"; }
@@ -463,12 +438,12 @@ void read_credentials() {
 }
 
 void nvs_read_sets() {
-	nvs_handle_t nvs = 0; sets_t temp; esp_err_t ret;
+	nvs_handle_t nvs = 0; esp_err_t ret;
 	ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
-	ret = nvs_get_u32(nvs, "sets", reinterpret_cast<uint32_t*>(&temp));
-	if (ret != ESP_OK ) { if (ret == ESP_ERR_NVS_NOT_FOUND) { } goto error; }
-	if (crc8_le(0, (byte*)&temp, 3) != temp.crc ) { log_d("crc err value = 0x%X", temp); goto error; }
-	if (temp.alarm == 0) { alarm_off(false); } sets = temp;
+	ret = nvs_get_u32(nvs, "sets", reinterpret_cast<uint32_t*>(&sets));
+	if (ret != ESP_OK) { if (ret == ESP_ERR_NVS_NOT_FOUND) {} goto error; }
+	if (crc8_le(0, (byte*)&sets, 3) != sets.crc) { log_d("crc err value = 0x%X", sets); goto error; }
+	sets.alarm ? alarm_on(false) : alarm_off(false);
 	nvs_close(nvs); return;
 error: sets.alarm = 1; nvs_write_sets(nvs);
 }
@@ -476,8 +451,8 @@ error: sets.alarm = 1; nvs_write_sets(nvs);
 void nvs_write_sets(nvs_handle_t nvs) {
 	nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
 	sets.crc = crc8_le(0, (byte*)&sets, 3); log_d("%u, %u", sets.alarm, sets.crc);
-	nvs_set_u32(nvs, "sets",reinterpret_cast<uint32_t&>(sets));
-	nvs_close(nvs); 
+	nvs_set_u32(nvs, "sets", reinterpret_cast<uint32_t&>(sets));
+	nvs_close(nvs);
 }
 
 void get_task_list(String& str) {
@@ -493,8 +468,8 @@ String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(300);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmainTask "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
-	str += "\nsendTask "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle); str += "\nsabTask "; str += uxTaskGetStackHighWaterMark2(sabTaskHandle);
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
+	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
 	str += "\nlast_interrupt: "; str += last_interrupt;
@@ -510,11 +485,12 @@ String get_info(bool ver) {
 }
 
 void alarm_on(bool write) {
-	enableInterrupt(PIN_LINE);  vTaskResume(sabTaskHandle);  sets.alarm = 1; if (write) nvs_write_sets(); /*timer_restart(timer_sab); timer_start(timer_sab);*/ 
-};
-void alarm_off(bool write) { 
-	disableInterrupt(PIN_LINE); vTaskSuspend(sabTaskHandle); sets.alarm = 0; if (write) nvs_write_sets(); /*timer_stop(timer_sab);*/ 
-};
+	enableInterrupt(PIN_LINE);  xTimerStart(timerSab, 0);  if (write) { sets.alarm = 1; nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
+}
+
+void alarm_off(bool write) {
+	disableInterrupt(PIN_LINE); xTimerStop(timerSab, 0);  if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
+}
 
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
