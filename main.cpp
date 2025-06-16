@@ -6,14 +6,15 @@ extern "C" void app_main() {
 	pinMode(PIN_LED, OUTPUT); pinMode(PIN_BUTTON, OPEN_DRAIN); dWrite(PIN_BUTTON, 1);//pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led;
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
-	timerSab = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE), pdFALSE, NULL, sabotageCallback, &xTimerBuffer); //CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
-	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE); //xTimerStart(timerSab, 0);
+	timerSabotage = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE), pdFALSE, NULL, sabotageCallback, &xTimerSabBuffer); //CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
+	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(100), pdFALSE, NULL, [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
+	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE); xTimerStart(timerSabotage, 0);
 	nvs_read_sets();
 	if (!SPIFFS.begin()) DEBUGLN("\nError while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_STA);
 	//wifi_server_init();
 	read_credentials();
-	if (!wifi_sta_init()) { WiFi.begin(DEFAULT_SSID, DEFAULT_PASS); if (!wifi_sta_init()) wifi_ap_init(); };
+	if (!wifi_sta_init()) { /*WiFi.begin(DEFAULT_SSID, DEFAULT_PASS);*/ if (!wifi_sta_init()) wifi_ap_init(); };
 #ifdef DEBUG_ENABLE
 	WiFi.printDiag(Serial); //log_d("sizeof(QueueMsgStorage) %u ", sizeof(QueueMsgStorage));
 #endif 
@@ -53,7 +54,7 @@ void sendTask(void*) {
 	Message msg("", CHAT_ID); tgMsg_t event; //sizeof(FastBot2);
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
-			AutoLed<PIN_LED> led; enableInterrupt(PIN_LINE);
+			AutoLed<PIN_LED> led; 
 			if (wifi_sta_init()) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
@@ -101,14 +102,15 @@ void time_sync(uint32_t wait_sec) {
 /*		INTERRUPTS		*/
 static void IRAM_ATTR isr_handler(/*void**/) {
 	if (lineRead) return;
-	xTimerResetFromISR(timerSab, NULL);
+	xTimerResetFromISR(timerSabotage, NULL);
 	uint64_t time = uS; //timer_restart(timer_sab); 
 	uint32_t delta = time - last_interrupt; tgMsg_t tmp;
 	last_interrupt = time; //interrupt_delta = delta; 
 	if (delta < 2400000 /*&& delta > 10000*/)
 #ifndef DEBUG_ENABLE
 	{
-		last_state = tmp.status = ALARM; if (delta < 10000) disableInterrupt(PIN_LINE);
+		if (delta < 10000) { disableInterrupt(PIN_LINE); xTimerStartFromISR(timerInterrupt, NULL); }
+		last_state = tmp.status = ALARM; 
 	}
 	else if (last_state == ok) return;
 	else { last_state = tmp.status = ok; } //isr_log_d("%u", tmp.status);
@@ -485,11 +487,11 @@ String get_info(bool ver) {
 }
 
 void alarm_on(bool write) {
-	enableInterrupt(PIN_LINE);  xTimerStart(timerSab, 0);  if (write) { sets.alarm = 1; nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
+	enableInterrupt(PIN_LINE);  xTimerStart(timerSabotage, 0);  if (write) { sets.alarm = 1; nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
 }
 
 void alarm_off(bool write) {
-	disableInterrupt(PIN_LINE); xTimerStop(timerSab, 0);  if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
+	disableInterrupt(PIN_LINE); xTimerStop(timerSabotage, 0);  if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
 }
 
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
