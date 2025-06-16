@@ -52,7 +52,6 @@
 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
 #define SEND_TASK_STACK_SIZE (8 * 1024)
-#define SAB_TASK_STACK_SIZE (2*1024)
 #define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
 #define QUEUE_LEN 32
 
@@ -62,9 +61,9 @@
 #define uS esp_timer_get_time()
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
-#define TIMER_SABOTAGE	2500'000
+#define TIMER_SABOTAGE	2500
 typedef uint32_t _time_t;
-using fb::Message, fb::Fetcher, fb::thisBot;
+using fb::Message, fb::Fetcher;
 
 typedef enum : uint8_t {
 	ok = 0,
@@ -92,26 +91,26 @@ typedef struct {
 	String ssid,pass;
 } auth_t;
 
-//const uint32_t _x = 0xDEADBEEF;
-
-StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE], xSabStack[SAB_TASK_STACK_SIZE];
-StaticTask_t xMainTaskBuffer, xSendTaskBuffer, xSabTaskBuffer;
-TaskHandle_t loopTaskHandle, sendTaskHandle, sabTaskHandle;	//task
+StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
-StaticQueue_t pxStaticQueue;
-QueueHandle_t QueueMsgHandle;	//queue
+StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
+StaticQueue_t xStaticQueue;
+StaticTimer_t xTimerBuffer;
+TaskHandle_t loopTaskHandle, sendTaskHandle;
+QueueHandle_t QueueMsgHandle;
+TimerHandle_t timerSab;
 __attribute__((unused)) gptimer_handle_t timer_sab;
 
 stat_t Flag = ok;
-sets_t sets;
 __attribute__((unused)) stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
-__attribute__((unused)) volatile uint32_t interrupt_delta;
-_time_t timestamp_unix;
 uint64_t time_sync_unix;
+_time_t timestamp_unix;
+__attribute__((unused)) volatile uint32_t interrupt_delta;
 network_event_handle_t event_id;
+sets_t sets;
 auth_t* Auth = nullptr;
-AsyncWebServer server(80);
+//AsyncWebServer server(80);
 FastBot2 bot(BOT_TOKEN);
 FastBot2 bot_upd(BOT_TOKEN);
 #ifndef NO_BLE
@@ -120,7 +119,7 @@ byte ble_data_size = 0;
 #endif
 void mainTask(void*);
 void sendTask(void*);
-void sabotageTask(void*);
+void sabotageCallback(TimerHandle_t);
 static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
@@ -169,6 +168,14 @@ void ota_progress(size_t progress, size_t size) {
 	}
 }
 
+void pir_reset() {
+	auto lambda = [](TimerHandle_t xTimer) {
+		pinMode(PIN_LINE, INPUT_PULLUP); xTimerDelete(xTimer, 0);
+	};
+	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3); pinMode(PIN_LINE, OUTPUT); dWrite(PIN_LINE, 0);
+	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(30 * 1000), pdFALSE, NULL, lambda), 0);
+};
+
 template<byte PIN, bool state = LED_ON>
 struct AutoLed {
 	AutoLed() { dWrite(PIN, state); };
@@ -215,7 +222,7 @@ void nvs_func() {
 	{ std::vector<const esp_partition_t*> partArr;
 	auto i = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
 	while (i != NULL) {
-		partArr.emplace_back(esp_partition_get(i));
+		partArr.push_back(esp_partition_get(i));
 		i = esp_partition_next(i);
 	}log_i("partition count: %u", partArr.size());
 	for (auto& var : partArr) { DEBUGF("Partition label %s, size %u, address 0x%X\n", var->label, var->size, var->address); }
@@ -277,7 +284,6 @@ void nvs_wifi_erase(nvs_handle_t nvs = 0) {
 	CHECK_RET(nvs_erase_all(nvs));
 }
 
-
 static void IRAM_ATTR interrupt_handler_s() {
 	static byte counter = 0; static int last_alarm_delta = -1;
 	uint64_t time = uS;
@@ -303,4 +309,17 @@ static void IRAM_ATTR interrupt_handler_s() {
 #ifdef DEBUG_ENABLE
 	last_alarm_delta = ok;
 #endif
+}
+
+static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
+	uint32_t delta = edata->count_value / 1000;
+	tgMsg_t tmp{
+		.status = lineRead ? LINE_HIGH : LINE_LOW,
+		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
+	};
+	//#ifdef DEBUG_ENABLE
+	last_state = tmp.status;
+	//#endif // DEBUG_ENABLE
+	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
+	return false;
 }
