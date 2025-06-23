@@ -33,7 +33,8 @@ void mainTask(void*) {
 	for (TickType_t tick = 0;;) {
 		switch (Flag) {
 		case RESEND_MSG:
-			if (send_alarm_time()) Flag = CHECK_MSG;
+			if (send_alarm_time()) 
+			{Flag = CHECK_MSG;}
 			else { log_i("%u", Flag); delay(15 * 60 * 1000); }
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
@@ -63,7 +64,7 @@ void sendTask(void*) {
 				default: msg.text = "OK";// goto _OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
-			_OK://if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
+				__unused _OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
@@ -102,8 +103,8 @@ void time_sync(uint32_t wait_sec) {
 /*		INTERRUPTS		*/
 static void IRAM_ATTR isr_handler(/*void**/) {
 	if (lineRead) return;
-	xTimerResetFromISR(timerSabotage, NULL);
-	uint64_t time = uS; //timer_restart(timer_sab); 
+	uint64_t time = uS;
+	xTimerResetFromISR(timerSabotage, NULL);//timer_restart(timer_sab); 
 	uint32_t delta = time - last_interrupt; tgMsg_t tmp;
 	last_interrupt = time; //interrupt_delta = delta; 
 	if (delta < 2400000 /*&& delta > 10000*/)
@@ -229,7 +230,7 @@ bool wifi_sta_init(uint32_t wait_sec) {
 	return true;
 }
 
-bool wifi_ap_init() {
+void wifi_ap_init() {
 	WiFi.mode(WIFI_MODE_APSTA);
 #if	AP_WIFI_CHANNEL > 11
 	CHECK_(esp_wifi_set_country_code("CN", false));
@@ -246,8 +247,9 @@ void wifi_server_init() {
 		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
 		request->send(404, "text/plain", "Not found");
 		});
-	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) {
-		String str = "Connecting to:\n"; "SSID = ["; str += Auth->ssid; str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n";
+	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) { String str;
+		if(Auth == nullptr) { str = "Auth empty";}
+		else { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n"; } 
 		request->send(200, "text/plain", str); resumeTask(WIFI_INIT);
 		});
 	server.on("/disconnect", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -393,7 +395,7 @@ void handleDocument(fb::Update& u) {
 }
 
 void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
-	AutoLed<PIN_LED> led; alarm_off();
+	AutoLed<PIN_LED> led; alarm_off(false);
 	vTaskSuspend(sendTaskHandle);
 	auto ptr = esp_ota_get_next_update_partition(NULL);
 	Message msg("OTA begin\nPartition: ", u.message().chat().id());
@@ -407,7 +409,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
 	else { msg.text = "Download error"; }
 	log_i("%s", msg.text.c_str());
 	bot_upd.sendMessage(msg);
-	alarm_on(); vTaskResume(sendTaskHandle);
+	alarm_on(false); vTaskResume(sendTaskHandle);
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
