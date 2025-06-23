@@ -1,15 +1,18 @@
 #pragma once
-#pragma GCC diagnostic ignored "-fpermissive"
+//#pragma GCC diagnostic ignored "-fpermissive"
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#pragma GCC diagnostic ignored "-Wmisleading-indentation"
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
 #define _USE_LONG_TIME_T
 #define _USE_32BIT_TIME_T
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
-#include <MAIN.h>
-#include <FastBot2.h>
-#include <GyverIO.h>
-#include <SPIFFS.h>
-#include <WiFiClientSecure.h>
-#include <ESPAsyncWebServer.h>
+#include "ESP_MAIN.h"
+#include "FastBot2.h"
+#include "GyverIO.h"
+#include "SPIFFS.h"
+#include "WiFiClientSecure.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
 //#include "time.h"
@@ -133,7 +136,7 @@ void get_task_list(String& str);
 String get_info(bool ver = false);
 void wifi_server_init();
 bool wifi_sta_init(uint32_t wait_sec = 5);
-bool wifi_ap_init();
+void wifi_ap_init();
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
 bool send_alarm_time(Message&& msg = Message("", CHAT_ID), FastBot2& _bot = bot, bool no_file = 1);
@@ -211,6 +214,7 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 		nvs_get_blob(handle, key, buf, &required_size);
 		if (size) *size = required_size;
 		break;
+	default:break;
 	}
 	return ret;
 }
@@ -225,11 +229,11 @@ void nvs_func() {
 		partArr.push_back(esp_partition_get(i));
 		i = esp_partition_next(i);
 	}log_i("partition count: %u", partArr.size());
-	for (auto& var : partArr) { DEBUGF("Partition label %s, size %u, address 0x%X\n", var->label, var->size, var->address); }
+	for (auto& var : partArr) { DEBUGF("Partition label %s, size %lu, address 0x%lX\n", var->label, var->size, var->address); }
 	esp_partition_iterator_release(i); }
 
 	nvs_get_stats(NULL, &nvs_stats);
-	DEBUGF("UsedEntries = (%lu), FreeEntries = (%lu), AvailableEntries = (%lu), AllEntries = (%lu), Namespaces = (%lu)\n",
+	DEBUGF("UsedEntries = (%u), FreeEntries = (%u), AvailableEntries = (%u), AllEntries = (%u), Namespaces = (%u)\n",
 		nvs_stats.used_entries, nvs_stats.free_entries, nvs_stats.available_entries, nvs_stats.total_entries, nvs_stats.namespace_count);
 
 	err = nvs_entry_find("nvs", NULL, NVS_TYPE_ANY, &it);
