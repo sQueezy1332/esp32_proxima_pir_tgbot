@@ -1,5 +1,9 @@
 #pragma once
 //#define CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_SILENT 1
+#define DEBUG_ENABLE
+//#define NO_GLOBAL_INSTANCES
+#define NO_GLOBAL_SERIAL
+#include "Arduino.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
@@ -9,14 +13,12 @@
 #include "esp_ota_ops.h"
 #include "hal/gpio_hal.h"
 #if defined CONFIG_AUTOSTART_ARDUINO
-#include "Arduino.h"
 #pragma message "CONFIG_AUTOSTART_ARDUINO"
 #endif
 #if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
 #include "esp_bt.h" 
 #if CONFIG_IDF_TARGET_ESP32
-bool btInUse() __weak_symbol; //overwritten in esp32-hal-bt.c
-bool btInUse() { return false; }
+__weak_symbol bool  btInUse() __weak_symbol { return false; } //overwritten in esp32-hal-bt.c
 #else
 /*extern */__weak_symbol bool btInUse() { return true; }
 #endif
@@ -36,6 +38,21 @@ bool btInUse() { return false; }
 //#define DEBUG_ENABLE
 #ifdef DEBUG_ENABLE
 #pragma message "DEBUG_ENABLE"
+#if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED)
+#define ARDUINO_USB_CDC_ON_BOOT 1
+#define ARDUINO_USB_MODE 1
+#endif
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE //Serial used from Native_USB_CDC | HW_CDC_JTAG        
+HWCDC HWCDCSerial; // Hardware CDC mode
+#define Serial HWCDCSerial // Arduino Serial is the HW JTAG CDC device
+#elif ARDUINO_USB_MODE// !ARDUINO_USB_MODE -- Native USB Mode
+USBCDC USBSerial(0); // Arduino Serial is the Native USB CDC device
+#define Serial USBSerial
+#else   // !ARDUINO_USB_CDC_ON_BOOT -- Serial is used from UART0
+extern HardwareSerial Serial0;
+#define Serial Serial0
+#endif  // ARDUINO_USB_CDC_ON_BOOT
+#define SerialBegin(x)  Serial.begin(x)
 #define DEBUG(x, ...) Serial.print(x, ##__VA_ARGS__)
 #define DEBUGLN(x, ...) Serial.println(x, ##__VA_ARGS__)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
@@ -49,11 +66,13 @@ bool btInUse() { return false; }
 #define NDEBUG
 #define CHECK_(x) (void)(x);
 #define CHECK_RET(x) do {esp_err_t ret = (x); if (unlikely(ret != ESP_OK)) {return;} }while(0)
+#define Serial
+#define SerialBegin(x)
 #endif // DEBUG_ENABLE
 #define uS esp_timer_get_time()
 #define delayms(x) vTaskDelay((x) / portTICK_PERIOD_MS)
 #define delayUntil(prev, tmr) vTaskDelayUntil((prev),pdMS_TO_TICKS(tmr))
-#define SEC(x) ((x)*1000000)
+#define SEC (1000000)
 #define ENTER_CRITICAL() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux)
 #define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);}
 #define timer_start(x) gptimer_start(x)
@@ -100,7 +119,7 @@ void main_init() {
 	setCpuFrequencyMhz(F_CPU / 1000000);
 #endif
 #if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE || defined DEBUG_ENABLE
-	log_v("Serial begin"); Serial.begin();
+	log_v("Serial begin"); SerialBegin(115200);
 #endif
 #if ARDUINO_USB_MSC_ON_BOOT && !ARDUINO_USB_MODE
 	MSC_Update.begin();
@@ -120,7 +139,7 @@ void main_init() {
 	//esp_log_level_set("*", CONFIG_LOG_DEFAULT_LEVEL);
 #if defined(CONFIG_BT_ENABLED) && SOC_BT_SUPPORTED
 	if (!btInUse()) {
-		esp_err_t ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_i("%i", ret);
+		esp_err_t ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_d("%i", ret);
 	}
 #endif
 #ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
@@ -199,7 +218,7 @@ void detachInterrupt(uint8_t pin) {
 	gpio_isr_handler_remove((gpio_num_t)pin);  //remove handle and disable isr for pin
 }
 //xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE);
-#undef CONFIG_AUTOSTART_ARDUINO
+//#undef CONFIG_AUTOSTART_ARDUINO
 #if CONFIG_AUTOSTART_ARDUINO
 TaskHandle_t loopTaskHandle = NULL;
 #if not defined ARDUINO_LOOP_STACK_SIZE && !defined CONFIG_ARDUINO_LOOP_STACK_SIZE
