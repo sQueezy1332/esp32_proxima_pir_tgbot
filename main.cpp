@@ -7,8 +7,8 @@ extern "C" void app_main() {
 	AutoLed<PIN_LED> led;
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
 	timerSabotage = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE), pdFALSE, NULL, sabotageCallback, &xTimerSabBuffer); //CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_check, 1, 0));
-	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(100), pdFALSE, NULL, [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
-	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE); xTimerStart(timerSabotage, 0);
+	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(100), pdFALSE, NULL, [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE); }, &xTimerIntrBuffer);
+	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE); //enableInterrupt(PIN_LINE); xTimerStart(timerSabotage, 0);
 	nvs_read_sets();
 	if (!SPIFFS.begin()) DEBUGLN("\nError while mounting SPIFFS");
 	WiFi.mode(WIFI_MODE_STA);
@@ -33,8 +33,7 @@ void mainTask(void*) {
 	for (TickType_t tick = 0;;) {
 		switch (Flag) {
 		case RESEND_MSG:
-			if (send_alarm_time()) 
-			{Flag = CHECK_MSG;}
+			if (send_alarm_time()) Flag = CHECK_MSG;
 			else { log_i("%u", Flag); delay(15 * 60 * 1000); }
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot_upd.tick(); } //log_v("");
@@ -55,7 +54,7 @@ void sendTask(void*) {
 	Message msg("", CHAT_ID); tgMsg_t event; //sizeof(FastBot2);
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
-			AutoLed<PIN_LED> led; 
+			AutoLed<PIN_LED> led;
 			if (wifi_sta_init()) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
@@ -64,7 +63,7 @@ void sendTask(void*) {
 				default: msg.text = "OK";// goto _OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
-				__unused _OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
+			_OK://if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000));
 				tick = xTaskGetTickCount(); log_i("%s", msg.text.c_str());
 				if (bot.sendMessage(msg)) {
@@ -111,7 +110,7 @@ static void IRAM_ATTR isr_handler(/*void**/) {
 #ifndef DEBUG_ENABLE
 	{
 		if (delta < 10000) { disableInterrupt(PIN_LINE); xTimerStartFromISR(timerInterrupt, NULL); }
-		last_state = tmp.status = ALARM; 
+		last_state = tmp.status = ALARM;
 	}
 	else if (last_state == ok) return;
 	else { last_state = tmp.status = ok; } //isr_log_d("%u", tmp.status);
@@ -124,7 +123,8 @@ static void IRAM_ATTR isr_handler(/*void**/) {
 }
 
 void sabotageCallback(TimerHandle_t xTimer) {
-	uint64_t time = uS, last = last_interrupt; uint32_t delta = time - last; tgMsg_t tmp;//if (last_state > ALARM) return;
+	if (last_state > ALARM) return; 
+	uint64_t time = uS, last = last_interrupt; uint32_t delta = time - last; tgMsg_t tmp;
 	last_state = tmp.status = lineRead ? LINE_HIGH : LINE_LOW;
 	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
 	xQueueSend(QueueMsgHandle, &tmp, 0);
@@ -230,7 +230,7 @@ bool wifi_sta_init(uint32_t wait_sec) {
 	return true;
 }
 
-void wifi_ap_init() {
+bool wifi_ap_init() {
 	WiFi.mode(WIFI_MODE_APSTA);
 #if	AP_WIFI_CHANNEL > 11
 	CHECK_(esp_wifi_set_country_code("CN", false));
@@ -248,9 +248,9 @@ void wifi_server_init() {
 		request->send(404, "text/plain", "Not found");
 		});
 	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) { String str;
-		if(Auth == nullptr) { str = "Auth empty";}
-		else { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n"; } 
-		request->send(200, "text/plain", str); resumeTask(WIFI_INIT);
+	if (Auth == nullptr) { str = "Auth empty"; }
+	else { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n"; }
+	request->send(200, "text/plain", str); resumeTask(WIFI_INIT);
 		});
 	server.on("/disconnect", HTTP_GET, [](AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "Disconnecting..."); resumeTask(WIFI_DISCONNECT);
@@ -340,7 +340,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = (int)img_state(true); break;
 	case SH("/invalid"): esp_ota_mark_app_invalid_rollback_and_reboot(); return;
 	case SH("/pir_reset"):
-		 pir_reset(); msg.text = "Done"; break;
+		pir_reset(); msg.text = "Done"; break;
 	case SH("/bot_kill"): {memset(reinterpret_cast<void*>(&bot), 0x0, sizeof(bot)); } break;
 		//case SH("/ota_invalidate"):
 		//msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
@@ -449,7 +449,7 @@ void nvs_read_sets() {
 	if (crc8_le(0, (byte*)&sets, 3) != sets.crc) { log_d("crc err value = 0x%X", sets); goto error; }
 	sets.alarm ? alarm_on(false) : alarm_off(false);
 	nvs_close(nvs); return;
-error: sets.alarm = 1; nvs_write_sets(nvs);
+error: alarm_on(false); nvs_write_sets(nvs);
 }
 
 void nvs_write_sets(nvs_handle_t nvs) {
@@ -489,11 +489,11 @@ String get_info(bool ver) {
 }
 
 void alarm_on(bool write) {
-	enableInterrupt(PIN_LINE);  xTimerStart(timerSabotage, 0);  if (write) { sets.alarm = 1; nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
+	enableInterrupt(PIN_LINE);  xTimerStart(timerSabotage, 0); sets.alarm = 1; if (write) { nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
 }
 
 void alarm_off(bool write) {
-	disableInterrupt(PIN_LINE); xTimerStop(timerSabotage, 0);  if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
+	disableInterrupt(PIN_LINE); xTimerStop(timerSabotage, 0);  sets.alarm = 0; if (write) { nvs_write_sets(); } /*timer_stop(timer_sab);*/
 }
 
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
