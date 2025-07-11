@@ -188,17 +188,14 @@ void pinMode(uint8_t pin, uint8_t mode) {
 }
 
 __attribute__((always_inline)) inline void digitalWrite(uint8_t pin, uint8_t val) {
-	//GPIO_CHECK(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), "GPIO output gpio_num error", ESP_ERR_INVALID_ARG);
-   //GPIO_HAL_GET_HW(GPIO_PORT_0);
-    if (!digitalPinCanOutput(pin)) return;
-    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+	if (!digitalPinCanOutput(pin)) return;
+	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
 	gpio_hal_set_level(&gpiohal, pin, val);
 }
 
 __attribute__((always_inline)) inline int digitalRead(uint8_t pin) {
-	//gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
-	//return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
-	return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
+	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin); //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
 }
 
 void attachInterruptArg(uint8_t pin, voidFuncPtrArg userFunc, void* arg, int intr_type) {
