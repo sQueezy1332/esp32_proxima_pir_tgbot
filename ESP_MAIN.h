@@ -3,7 +3,7 @@
 #define DEBUG_ENABLE
 //#define NO_GLOBAL_INSTANCES
 #define NO_GLOBAL_SERIAL
-#include "Arduino.h"
+#include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_task_wdt.h"
@@ -116,7 +116,7 @@ void main_init() {
 #endif
 #endif
 #ifdef F_CPU
-	setCpuFrequencyMhz(F_CPU / 1000000);
+	//setCpuFrequencyMhz(F_CPU / 1000000);
 #endif
 #if ARDUINO_USB_CDC_ON_BOOT && !ARDUINO_USB_MODE || defined DEBUG_ENABLE
 	log_v("Serial begin"); SerialBegin(115200);
@@ -142,7 +142,7 @@ void main_init() {
 		esp_err_t ret = esp_bt_controller_mem_release(ESP_BT_MODE_BTDM); log_d("%i", ret);
 	}
 #endif
-#ifdef CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+#if defined CONFIG_APP_ROLLBACK_ENABLE || CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 	//if (!verifyRollbackLater()) { log_i("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
 #endif
 }
@@ -187,12 +187,18 @@ void pinMode(uint8_t pin, uint8_t mode) {
 	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
 
-void digitalWrite(uint8_t pin, uint8_t val) {
-	gpio_set_level((gpio_num_t)pin, val);
+__attribute__((always_inline)) inline void digitalWrite(uint8_t pin, uint8_t val) {
+	//GPIO_CHECK(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), "GPIO output gpio_num error", ESP_ERR_INVALID_ARG);
+   //GPIO_HAL_GET_HW(GPIO_PORT_0);
+    if (!digitalPinCanOutput(pin)) return;
+    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+	gpio_hal_set_level(&gpiohal, pin, val);
 }
 
-int digitalRead(uint8_t pin) {
-	return gpio_get_level((gpio_num_t)pin);
+__attribute__((always_inline)) inline int digitalRead(uint8_t pin) {
+	//gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+	//return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
+	return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
 }
 
 void attachInterruptArg(uint8_t pin, voidFuncPtrArg userFunc, void* arg, int intr_type) {
