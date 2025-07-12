@@ -1,22 +1,21 @@
 #pragma once
-//#pragma GCC diagnostic ignored "-fpermissive"
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #pragma GCC diagnostic ignored "-Wmisleading-indentation"
 #pragma GCC diagnostic ignored "-Wunused-function"
-#pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough" 
+//#pragma GCC diagnostic ignored "-Woverloaded-virtual" 
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
 #define _USE_32BIT_TIME_T
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include "ESP_MAIN.h"
 #include "FastBot2.h"
-#include "GyverIO.h"
 #include "SPIFFS.h"
-#include "WiFiClientSecure.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
 //#include "time.h"
-#ifndef CONFIG_BT_BLE_50_FEATURES_SUPPORTED
+#ifndef CONFIG_SOC_BLE_50_SUPPORTED
 #warning "Not compatible hardware"
 #define NO_BLE
 #endif
@@ -29,15 +28,14 @@
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
 #define PIN_RELAY PIN_BUTTON
+#define PIN_LINE 4
 #if defined ESP32C3_LUATOS
-#define PIN_LINE 5
-#define PIN_PULLUP 4
+#define PIN_PULLUP 5
 #define PIN_LED_D5 12
 #define PIN_LED 13
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #else
-#define PIN_LINE 4
 #define PIN_PULLUP 3
 #define PIN_LED 8
 #define LED_ON	LOW
@@ -58,13 +56,13 @@
 #define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
 #define QUEUE_LEN 32
 
-#define lineRead gio::read(PIN_LINE)
-#define dWrite(pin, val) gio::write(pin, val)
-#define dRead(pin) gio::read(pin)
+#define lineRead digitalRead(PIN_LINE)
+#define dWrite(pin, val) digitalWrite(pin, val)
+#define dRead(pin) digitalRead(pin)
 #define uS esp_timer_get_time()
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
-#define TIMER_SABOTAGE	2500
+#define TIMER_SABOTAGE	2500*1000
 typedef uint32_t _time_t;
 using fb::Message, fb::Fetcher;
 
@@ -315,7 +313,7 @@ static void IRAM_ATTR interrupt_handler_s() {
 #endif
 }
 
-static bool IRAM_ATTR sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
+static bool sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
 	uint32_t delta = edata->count_value / 1000;
 	tgMsg_t tmp{
 		.status = lineRead ? LINE_HIGH : LINE_LOW,
