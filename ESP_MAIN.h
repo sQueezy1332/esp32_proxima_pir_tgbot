@@ -167,7 +167,7 @@ esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_
 		gptimer_event_callbacks_t cbs = { .on_alarm = func };
 		if ((ret = gptimer_new_timer(&config, &handle))
 			|| (ret = gptimer_register_event_callbacks(handle, &cbs, NULL))
-			|| (ret = gptimer_enable(hand`le))
+			|| (ret = gptimer_enable(handle))
 			|| (ret = timer_alarm(value, handle, reload, count)))
 			goto exit;
 		if (start) ret = gptimer_start(handle);
