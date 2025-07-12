@@ -167,7 +167,7 @@ esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_
 		gptimer_event_callbacks_t cbs = { .on_alarm = func };
 		if ((ret = gptimer_new_timer(&config, &handle))
 			|| (ret = gptimer_register_event_callbacks(handle, &cbs, NULL))
-			|| (ret = gptimer_enable(handle))
+			|| (ret = gptimer_enable(hand`le))
 			|| (ret = timer_alarm(value, handle, reload, count)))
 			goto exit;
 		if (start) ret = gptimer_start(handle);
@@ -175,27 +175,27 @@ esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_
 		return ret;
 	}
 
-void pinMode(uint8_t pin, uint8_t mode) {
+ void pinMode(uint8_t pin, uint8_t mode) {
 	if (mode >= 32) { log_d("pinMode(%u, %u)", pin, mode); return; }
 	gpio_config_t conf = {
 		.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
-		.mode = mode & OPEN_DRAIN ? GPIO_MODE_INPUT_OUTPUT_OD : GPIO_MODE_INPUT_OUTPUT ,	/*!< GPIO mode: set input/output mode                     */
+		.mode = (gpio_mode_t)(mode & GPIO_MODE_INPUT_OUTPUT_OD),	/*!<  GPIO mode: set input/output mode                     */
 		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
 		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
 		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
 	};
 	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
-
+ 
 __attribute__((always_inline)) inline void digitalWrite(uint8_t pin, uint8_t val) {
-	if (!digitalPinCanOutput(pin)) return;
-	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+    if (!digitalPinCanOutput(pin)) return;
+    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
 	gpio_hal_set_level(&gpiohal, pin, val);
 }
 
 __attribute__((always_inline)) inline int digitalRead(uint8_t pin) {
-	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
-	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin); //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
+	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
+	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
 }
 
 void attachInterruptArg(uint8_t pin, voidFuncPtrArg userFunc, void* arg, int intr_type) {
