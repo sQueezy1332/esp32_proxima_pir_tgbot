@@ -4,7 +4,7 @@
 extern "C" void app_main() {
 	main_init();//nvs_func();
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
-	pinMode(PIN_LED, OUTPUT); pinMode(PIN_LED_D5, OUTPUT); //pinMode(PIN_RELAY, OUTPUT);
+	pinMode(PIN_LED, OUTPUT); pinMode(PIN_LED_D5, PULLUP| OUTPUT_OPEN_DRAIN); //pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led;
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
 	//timerSabotage = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE +50), pdFALSE, NULL, sabotageCallback, &xTimerSabBuffer); 
@@ -39,7 +39,7 @@ void mainTask(void*) {
 		switch (Flag) {
 		case RESEND_MSG: 
 		if(xTaskGetTickCount() - lastTry > pdMS_TO_TICKS(15 * 60 * 1000)) {
-			send_alarm_time() ? Flag = CHECK_MSG : log_i("%u", Flag); lastTry = xTaskGetTickCount();
+			if(send_alarm_time()) Flag = CHECK_MSG; log_i("%u", Flag); lastTry = xTaskGetTickCount();
 		}
 		case CHECK_MSG:
 			if (wifi_sta_init()) { bot.tick(); } //log_v("");
@@ -185,7 +185,7 @@ bool readFile(cch* path, String& Content) {
 		return false;
 	}
 	Content = file.readStringUntil('\0');
-	return true;fb::Packet v;v.printTo(Serial);
+	return true;
 }
 
 bool writeFile(cch* path, const String& Content) {
@@ -196,7 +196,7 @@ bool writeFile(cch* path, const String& Content) {
 		DEBUGLN(" file written");
 		return true;
 	}
-	else DEBUGLN(" write failed");
+	else {DEBUGLN(" write failed");}
 	return false;
 }
 
@@ -208,18 +208,18 @@ bool appendFile(cch* path, _time_t value) {
 		DEBUGLN(" file written");
 		return true;
 	}
-	else DEBUGLN(" write failed");
+	else {DEBUGLN(" write failed");}
 	return false;
 }
 
 bool deleteFile(cch* path) {
 	DEBUG("Deleting file: "); DEBUG(path);
-	if (SPIFFS.remove(path)) {
-		DEBUGLN(" file deleted");
-		return true;
+	if (!SPIFFS.remove(path)) {
+		DEBUGLN(" delete failed");
+		return false;
 	}
-	else DEBUGLN(" delete failed");
-	return false;
+	DEBUGLN(" file deleted");
+	return true;
 }
 /*		WIFI	*/
 bool wifi_sta_init(uint32_t wait_sec) {
