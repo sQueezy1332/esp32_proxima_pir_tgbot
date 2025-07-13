@@ -361,7 +361,7 @@ void handleMessage(fb::Update& u) {
 	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(10'000), pdFALSE, NULL, 
 	[](TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }), 0))
 	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; msg.text += " push"; } break;
-	case SH("/pwr_pop"):
+	case SH("/pwr_up"):
 		dWrite(PIN_PWR_BUTTON, 1); msg.text = "pwr_btn"; msg.text += " release"; break;
 #ifndef NO_BLE
 	case SH("/ble"): {
