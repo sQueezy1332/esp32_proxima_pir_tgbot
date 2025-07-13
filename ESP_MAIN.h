@@ -147,16 +147,15 @@ void main_init() {
 #endif
 }
 
-esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 1, uint64_t count = 0) {
-		static gptimer_alarm_config_t alarm_config{
+esp_err_t timer_alarm(uint64_t value, gptimer_handle_t& handle, bool reload = 0, uint64_t count = 0) {
+		gptimer_alarm_config_t alarm_config{
 			.alarm_count = value,
 			.reload_count = count,
 			.flags = {.auto_reload_on_alarm = reload} //.flags.auto_reload_on_alarm = reload,
 		};
 		return gptimer_set_alarm_action(handle, &alarm_config);
 	}
-esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func,
-	bool start = 1, bool reload = 1, uint64_t count = 0) {
+esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_t func, bool start = 1, bool reload = 0) {
 		esp_err_t ret = ESP_OK;
 		gptimer_config_t config{
 			.clk_src = GPTIMER_CLK_SRC_DEFAULT,
@@ -168,10 +167,10 @@ esp_err_t timer_init(uint64_t value, gptimer_handle_t& handle, gptimer_alarm_cb_
 		if ((ret = gptimer_new_timer(&config, &handle))
 			|| (ret = gptimer_register_event_callbacks(handle, &cbs, NULL))
 			|| (ret = gptimer_enable(handle))
-			|| (ret = timer_alarm(value, handle, reload, count)))
+			|| (ret = timer_alarm(value, handle, reload)))
 			goto exit;
 		if (start) ret = gptimer_start(handle);
-	exit:log_v("ret = %i", ret);
+	exit://log_v("ret = %i", ret);
 		return ret;
 	}
 
