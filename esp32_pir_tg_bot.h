@@ -4,9 +4,11 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough" 
 //#pragma GCC diagnostic ignored "-Woverloaded-virtual" 
+//#pragma GCC diagnostic ignored "-Wextra" 
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
 #define _USE_32BIT_TIME_T
+#define MBEDTLS_DEBUG_C
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include "ESP_MAIN.h"
@@ -27,8 +29,9 @@
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_RELAY PIN_BUTTON
-#define PIN_LINE 4
+#define PIN_PWR_BUTTON 5
+#define PIN_RELAY 10
+#define PIN_LINE 5
 #if defined ESP32C3_LUATOS
 #define PIN_PULLUP 5
 #define PIN_LED_D5 12
@@ -62,7 +65,10 @@
 #define uS esp_timer_get_time()
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
-#define TIMER_SABOTAGE	2500*1000
+#define TIMER_SABOTAGE	2500'000
+#define timer_restart_impl() timer_restart(timer_sab) //xTimerResetFromISR(timerSabotage, NULL);
+#define timer_start_impl() timer_start(timer_sab)//xTimerStart(timerSabotage, 0);
+#define timer_stop_impl() timer_stop(timer_sab)//xTimerStop(timerSabotage, 0);
 typedef uint32_t _time_t;
 using fb::Message, fb::Fetcher;
 
@@ -96,14 +102,14 @@ StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
 StaticQueue_t xStaticQueue;
-StaticTimer_t xTimerSabBuffer, xTimerIntrBuffer;
+StaticTimer_t xTimerIntrBuffer/*, xTimerSabBuffer*/;
 TaskHandle_t loopTaskHandle, sendTaskHandle;
 QueueHandle_t QueueMsgHandle;
-TimerHandle_t timerSabotage, timerInterrupt;
+TimerHandle_t timerInterrupt/*,  timerSabotage */;
 __attribute__((unused)) gptimer_handle_t timer_sab;
 
 stat_t Flag = ok;
-__attribute__((unused)) stat_t last_state = ok;
+__attribute__((unused)) volatile stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
 uint64_t time_sync_unix;
 _time_t timestamp_unix;
@@ -113,7 +119,7 @@ sets_t sets;
 auth_t* Auth = nullptr;
 //AsyncWebServer server(80);
 FastBot2 bot(BOT_TOKEN);
-FastBot2 bot_upd(BOT_TOKEN);
+FastBot2 botSend(BOT_TOKEN);
 #ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
@@ -122,7 +128,7 @@ void mainTask(void*);
 void sendTask(void*);
 void sabotageCallback(TimerHandle_t);
 static void IRAM_ATTR isr_handler(/*void**/);
-static bool IRAM_ATTR sabotage_check(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
+static bool IRAM_ATTR sabotage_timer(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
 void time_sync(uint32_t wait_sec = 10);
 bool readFile(cch* path, String& Content);
@@ -137,7 +143,7 @@ bool wifi_sta_init(uint32_t wait_sec = 5);
 void wifi_ap_init();
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
-bool send_alarm_time(Message&& msg = Message("", CHAT_ID), FastBot2& _bot = bot, bool no_file = 1);
+bool send_alarm_time(Message&& msg = Message("", CHAT_ID), FastBot2& _bot = botSend , bool no_file = 1);
 void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
@@ -148,7 +154,7 @@ void nvs_read_sets();
 void nvs_write_sets(nvs_handle_t nvs = 0);
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
-void resumeTask(stat_t st) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
+void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
 bool auth_handler(AsyncWebServerRequest*& request) {
 	if (Auth) {
 		if (!request->authenticate(Auth->ssid.c_str(), Auth->pass.c_str())) {
@@ -313,15 +319,9 @@ static void IRAM_ATTR interrupt_handler_s() {
 #endif
 }
 
-static bool sabotage_check(gptimer_handle_t tmr, const gptimer_alarm_event_data_t* edata, void* user_ctx) {
-	uint32_t delta = edata->count_value / 1000;
-	tgMsg_t tmp{
-		.status = lineRead ? LINE_HIGH : LINE_LOW,
-		.delta = (uint16_t)(delta > __UINT16_MAX__ ? __UINT16_MAX__ : delta)
-	};
-	//#ifdef DEBUG_ENABLE
-	last_state = tmp.status;
-	//#endif // DEBUG_ENABLE
-	xQueueSendFromISR(QueueMsgHandle, &tmp, nullptr);
-	return false;
+void sabotageCallback(TimerHandle_t xTimer) {
+	uint64_t time = uS, last = last_interrupt; uint32_t delta = time - last; tgMsg_t tmp;//if (last_state > ALARM) return;
+	last_state = tmp.status = (lineRead ? LINE_HIGH : LINE_LOW);
+	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
+	xQueueSend(QueueMsgHandle, &tmp, 0);
 }
