@@ -1,6 +1,6 @@
 #include "esp32_pir_tg_bot.h"
 /*		INIT	*/
-/* extern "C"*/ 
+
 extern "C" void app_main() {
 	main_init();//nvs_func();
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
@@ -8,7 +8,7 @@ extern "C" void app_main() {
 	AutoLed<PIN_LED> led;
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
 	//timerSabotage = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE +50), pdFALSE, NULL, sabotageCallback, &xTimerSabBuffer); 
-	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_timer));
+	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_timer, false));
 	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL, [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	nvs_read_sets();
@@ -51,7 +51,7 @@ void mainTask(void*) {
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: bot.tickManual(); yield(); esp_restart();
-		default: delay(500); Flag = CHECK_MSG;
+		default: delay(1000); Flag = CHECK_MSG;
 		}
 	}
 }
@@ -117,7 +117,7 @@ static void isr_handler(/*void**/) {
 		tmp.status = ALARM; tmp.delta = (uint16_t)(delta / 1000);
 	}
 	else if (last_state == ok) return;
-	else { tmp.status = ok; last_state > ALARM ? tmp.counter = 1 : tmp.counter = 0;} //isr_log_d("%u", tmp.status);
+	else { tmp.status = ok; tmp.counter = (last_state > ALARM) ? 1 : 0;} //isr_log_d("%u", tmp.status);
 	last_state = tmp.status;
 	xQueueSendFromISR(QueueMsgHandle, &tmp, NULL);//sizeof(tgMsg_t)
 }
@@ -501,11 +501,11 @@ void alarm_off(bool write) {
 }
 
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
-	byte shift, nibble, num; size_t i = 0, str_size = data_size * 3;
+	size_t i = 0, str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; char* ptr = str.begin();
 	reinterpret_cast<uint32_t*>(&str)[2] = str_size;
-	for (;;) {
-		for (shift = 4, num = buf[i];; shift = 0) {
+	for (byte shift, nibble, num;;) {
+		for (byte shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
 			nibble < 10 ? *ptr = nibble ^ 0x30 : *ptr = nibble + ('A' - 10);
 			++ptr;
