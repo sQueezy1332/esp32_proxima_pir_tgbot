@@ -503,7 +503,7 @@ void alarm_off(bool write) {
 void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 	size_t i = 0, str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; char* ptr = str.begin();
-	reinterpret_cast<uint32_t*>(&str)[2] = str_size;
+	reinterpret_cast<uint32_t*>(&str)[2] = str_size;log_d("%u", str.length());
 	for (byte shift, nibble, num;;) {
 		for (byte shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
@@ -511,9 +511,9 @@ void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
 			++ptr;
 			if (shift == 0) break;
 		}
-		if (++i >= data_size) { *ptr = '\0'; break; }
+		if (++i >= data_size) break;
 		*ptr++ = ' ';
-	} log_d("%u", str.length());
+	} *ptr = '\0';
 }
 
 bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
