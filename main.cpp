@@ -1,6 +1,5 @@
 #include "esp32_pir_tg_bot.h"
 /*		INIT	*/
-
 extern "C" void app_main() {
 	main_init();//nvs_func();
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
