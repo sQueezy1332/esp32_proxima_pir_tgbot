@@ -3,7 +3,7 @@
 #pragma GCC diagnostic ignored "-Wmisleading-indentation"
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough" 
-//#pragma GCC diagnostic ignored "-Woverloaded-virtual" 
+#pragma GCC diagnostic ignored "-Woverloaded-virtual" 
 //#pragma GCC diagnostic ignored "-Wextra" 
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
@@ -18,24 +18,25 @@
 #include "rom/crc.h"
 //#include "time.h"
 #ifndef CONFIG_SOC_BLE_50_SUPPORTED
-#warning "Not compatible hardware"
+//#warning "Not compatible hardware"
 #define NO_BLE
 #endif
+#define FIRST_BUILD
 #include "OTAserver.h"
 #include "credentials.h"
 //#include "BLE_api.h"
-
+static_assert(sizeof(time_t) == 4);
 #define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_PWR_BUTTON 5
+#define PIN_PWR_BUTTON 8
 #define PIN_RELAY 10
-#define PIN_LINE 5
+#define PIN_LINE 4
 #if defined ESP32C3_LUATOS
 #define PIN_PULLUP 5
-#define PIN_LED_D5 12
-#define PIN_LED 13
+#define PIN_LED_D5 13
+#define PIN_LED 12	//D4
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #else
@@ -67,9 +68,9 @@
 #define DelayUs(x) ets_delay_us(x)
 #define TIMER_SABOTAGE	2500'000
 #define timer_restart_impl() timer_restart(timer_sab) //xTimerResetFromISR(timerSabotage, NULL);
-#define timer_start_impl() timer_start(timer_sab)//xTimerStart(timerSabotage, 0);
-#define timer_stop_impl() timer_stop(timer_sab)//xTimerStop(timerSabotage, 0);
-typedef uint32_t _time_t;
+#define timer_start_impl() {timer_restart(timer_sab); gptimer_start(timer_sab);}//xTimerStart(timerSabotage, 0);
+#define timer_stop_impl() gptimer_stop(timer_sab)//xTimerStop(timerSabotage, 0);
+
 using fb::Message, fb::Fetcher;
 
 typedef enum : uint8_t {
@@ -86,60 +87,60 @@ typedef enum : uint8_t {
 	PANIC,
 } stat_t;
 
-typedef struct /*__attribute__((packed))*/ {
-	stat_t status; byte counter; uint16_t delta;
-} tgMsg_t;
+typedef struct { stat_t status; byte counter; uint16_t delta; } tgMsg_t;
 
-typedef struct {
-	unsigned alarm : 1, reserved : 23; byte crc;
-} sets_t;
+typedef struct { unsigned alarm : 1, res : 23; byte crc; } sets_t;
 
-typedef struct {
-	String ssid,pass;
-} auth_t;
+typedef struct { String ssid,pass; } auth_t;
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
-uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
-StaticQueue_t xStaticQueue;
-StaticTimer_t xTimerIntrBuffer/*, xTimerSabBuffer*/;
 TaskHandle_t loopTaskHandle, sendTaskHandle;
+
+uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
+StaticQueue_t xStaticQueue;
 QueueHandle_t QueueMsgHandle;
-TimerHandle_t timerInterrupt/*,  timerSabotage */;
-__attribute__((unused)) gptimer_handle_t timer_sab;
+
+StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
+TimerHandle_t timerInterrupt/* , timerSabotage */;
+gptimer_handle_t timer_sab;
 
 stat_t Flag = ok;
-__attribute__((unused)) volatile stat_t last_state = ok;
+__attribute__((unused)) stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
 uint64_t time_sync_unix;
-_time_t timestamp_unix;
+time_t timestamp_unix;
 __attribute__((unused)) volatile uint32_t interrupt_delta;
 network_event_handle_t event_id;
+nvs_handle_t nvsHandle = 0;
 sets_t sets;
 auth_t* Auth = nullptr;
-//AsyncWebServer server(80);
-FastBot2 bot(BOT_TOKEN);
-FastBot2 botSend(BOT_TOKEN);
-#ifndef NO_BLE
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
+esp_err_t update_error = ESP_OK;
+FastBot2 bot(BOT_TOKEN);
+FastBot2 botSend(BOT_TOKEN);
+#ifdef FIRST_BUILD
+#pragma message "FIRST_BUILD"
+AsyncWebServer server(80);
 #endif
+
 void mainTask(void*);
 void sendTask(void*);
 void sabotageCallback(TimerHandle_t);
 static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_timer(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
 void read_credentials();
-void time_sync(uint32_t wait_sec = 10);
+void time_sync(byte wait_sec = 10);
 bool readFile(cch* path, String& Content);
 bool writeFile(cch* path, const String& Content);
-bool appendFile(cch* path, _time_t value);
+bool appendFile(cch* path, time_t value);
 bool deleteFile(cch* path);
 void onWiFiConnected(arduino_event_id_t event);
 void get_task_list(String& str);
 String get_info(bool ver = false);
 void wifi_server_init();
-bool wifi_sta_init(uint32_t wait_sec = 5);
+bool wifi_sta_init(uint32_t = 5 * (1000 / STA_INIT_DELAY));
 void wifi_ap_init();
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
@@ -154,34 +155,29 @@ void nvs_read_sets();
 void nvs_write_sets(nvs_handle_t nvs = 0);
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
-void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskAbortDelay(loopTaskHandle);/*vTaskResume(mainTaskHandle);*/ };
+void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskNotify(loopTaskHandle,0,eNoAction); };
 bool auth_handler(AsyncWebServerRequest*& request) {
-	if (Auth) {
-		if (!request->authenticate(Auth->ssid.c_str(), Auth->pass.c_str())) {
+	if (Auth && !request->authenticate(Auth->ssid.c_str(), Auth->pass.c_str())) {
 			request->requestAuthentication();
 			return false;
-		}
 	}
 	return true;
 }
 
 void ota_progress(size_t progress, size_t size) {
 	static auto ota_timestamp = uS; auto time = uS;
-	if (progress == 0) DEBUGF("OTA overall size bytes: %u\n", size);
+	if (progress == 0) {DEBUGF("OTA overall size bytes: %u\n", size);}
 	if (time - ota_timestamp > 500000) {
 		ota_timestamp = time;
-		DEBUG("OTA Progress bytes: ");
-		DEBUGLN(progress);
+		DEBUG("OTA Progress bytes: "); DEBUGLN(progress);
 	}
 }
 
 void pir_reset() {
-	auto lambda = [](TimerHandle_t xTimer) {
-		pinMode(PIN_LINE, INPUT_PULLUP); xTimerDelete(xTimer, 0);
-	};
-	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3); pinMode(PIN_LINE, OUTPUT); dWrite(PIN_LINE, 0);
-	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(60 * 1000), pdFALSE, NULL, lambda), 0);
-};
+	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3);  dWrite(PIN_LINE, 0); //OPEN_DRAIN
+	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(60 * 1000), pdFALSE, NULL, [](TimerHandle_t xTimer) {
+		dWrite(PIN_LINE, 1); xTimerDelete(xTimer, 0);}), 0);
+}
 
 template<byte PIN, bool state = LED_ON>
 struct AutoLed {
@@ -190,6 +186,14 @@ struct AutoLed {
 	AutoLed(const AutoLed&) = delete;
 	AutoLed& operator=(const AutoLed&) = delete;
 };
+
+inline void led_blink() {
+#ifdef DEBUG_ENABLE 
+	static bool state = false;
+
+#endif
+dWrite(PIN_LED_D5, state = !state);
+}
 
 bool verifyRollbackLater() { return true; };
 
