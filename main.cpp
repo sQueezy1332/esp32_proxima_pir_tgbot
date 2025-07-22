@@ -379,7 +379,7 @@ void handleMessage(fb::Update& u) {
 	} break;
 	default: {
 		if (u.message().text().startsWith(BLE_SET)) {
-			if (strtoB(u.message().text(), sizeof(BLE_SET), ble_data, ble_data_size)) {
+			if (strtoB(u.message().text(), ble_data, ble_data_size, sizeof(BLE_SET))) {
 				create_hex_string(msg.text, ble_data, ble_data_size);
 			}
 			else msg.text = "Wrong format";
@@ -471,11 +471,10 @@ void nvs_write_sets(nvs_handle_t nvs) {
 
 void get_task_list(String& str) {
 	auto num = uxTaskGetNumberOfTasks(); log_d("GetNumberOfTasks = %u", num);
-	if (str.reserve(num * 35)) {
-		char* const ptr = str.begin();
-		vTaskList(ptr);
-		reinterpret_cast<uint32_t*>(&str)[2] = strlen(ptr);
-	}
+	if (!str.reserve(num * 35)) return;
+	char* const ptr = str.begin();
+	vTaskList(ptr);
+	reinterpret_cast<uint32_t*>(&str)[2] = strlen(ptr);
 }
 
 String get_info(bool ver) {
@@ -506,28 +505,26 @@ void alarm_off(bool write) {
 	disableInterrupt(PIN_LINE); timer_stop_impl(); if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
 }
 
-void create_hex_string(String& str, cbyte* const& buf, cbyte data_size) {
+void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
 	size_t i = 0, str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; char* ptr = str.begin();
-	reinterpret_cast<uint32_t*>(&str)[2] = str_size;log_d("%u", str.length());
-	for (byte shift, nibble, num;;) {
+	if(str_size >= 15) reinterpret_cast<uint32_t*>(&str)[2] = str_size;
+	else { byte *field = reinterpret_cast<byte*>(&str) + 15; *field = (*field & 0x80) | (str_size & 0x7F);} log_d("%u", str.length());
+	for (byte shift, nibble, num;;*ptr++ = ' ') {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
-			*ptr = nibble < 10 ? nibble ^ 0x30 : nibble + ('A' - 10);
-			++ptr;
+			*ptr++ = nibble < 10 ? nibble ^ 0x30 : nibble + ('A' - 10);
 			if (shift == 0) break;
-		}
+		} 
 		if (++i >= data_size) break;
-		*ptr++ = ' ';
-	} *ptr = '\0';
+	}*ptr = '\0';
 }
 
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
+byte strtoB(const String& str, byte*& buf, byte sub, bool heap)  {
 	size_t str_len = str.length() - sub, hex_len = (str_len + 1) / 2; log_d("hex_len = %u", hex_len);
-	if (hex_len < 6 || hex_len > 255) return false;
+	if (hex_len < 4 || hex_len > 255) return false;
 	byte i = 0; cch* ptr = str.c_str() + sub;
-	free(buf); buf = (byte*)malloc(hex_len);
-	if (buf == NULL) return false;
+	byte* _buf = (byte*)realloc(buf, hex_len); if (buf == NULL) return false; buf = _buf;
 	for (byte ready = 0, result = 0; *ptr; ++ptr) {
 		switch (*ptr) {
 		case '0'... '9':
@@ -536,7 +533,7 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
 		case 'A'... 'F':
 			if (result & 0xf) result <<= 4;
 			result |= *ptr - 55; break;
-		case 'a'...'f':
+		case 'a' ...'f' :
 			if (result & 0xf) result <<= 4;
 			result |= *ptr - 87; break;
 		default:
@@ -544,13 +541,12 @@ bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len) {
 			continue;
 		}
 		if (ready) {
-		rdy:
-			buf[i] = result;
-			if (++i == hex_len) break;
+		rdy:buf[i] = result;
+			if (++i >= hex_len) break;
 			result = 0; ready = 0;
-			continue;
 		}
-		ready = 1;
+		else ready = 1;
 	}
-	return realloc(buf, (data_len = i)) != NULL;
+	__unused void * temp = realloc(buf, i);
+	return i;
 }
