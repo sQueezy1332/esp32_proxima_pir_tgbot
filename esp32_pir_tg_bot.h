@@ -138,6 +138,7 @@ bool appendFile(cch* path, time_t value);
 bool deleteFile(cch* path);
 void onWiFiConnected(arduino_event_id_t event);
 void get_task_list(String& str);
+String get_task_list() { String str; get_task_list(str); return str;}
 String get_info(bool ver = false);
 void wifi_server_init();
 bool wifi_sta_init(uint32_t = 5 * (1000 / STA_INIT_DELAY));
@@ -149,8 +150,12 @@ void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
-void create_hex_string(String& str, cbyte* const& buf, cbyte data_size);
-bool strtoB(const String& str, byte sub, byte*& buf, byte& data_len);
+byte strtoB(const String& str, byte*& buf, byte sub = 0, bool heap = true);
+void create_hex_string(String& str, cbyte* buf, cbyte data_size);
+String create_hex_string(cbyte* buf, cbyte data_size) {
+	String str; create_hex_string(str,buf,data_size); return str;
+};
+
 void nvs_read_sets();
 void nvs_write_sets(nvs_handle_t nvs = 0);
 void alarm_on(bool write = true);
