@@ -31,8 +31,6 @@ extern "C" void app_main() {
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
-	//byte key_open[] { 0x01,0xAB, 0xCD, 0xEF }; byte key_open2[] { std::byteswap({ 0x01,0xAB, 0xCD, 0xEF }); };
-	
 }
 
 
