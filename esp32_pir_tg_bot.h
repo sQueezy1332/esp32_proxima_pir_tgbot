@@ -23,7 +23,7 @@
 #endif
 #define FIRST_BUILD
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
-#define CONFIG_ASYNC_TCP_USE_WDT
+#define CONFIG_ASYNC_TCP_USE_WDT 0
 #include "OTAserver.h"
 #include "credentials.h"
 //#include "BLE_api.h"
