@@ -5,10 +5,9 @@ extern "C" void app_main() {
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
 	pinMode(PIN_LED_D5, PULLUP | OUTPUT); pinMode(PIN_BUTTON, INPUT);//pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
-	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, &QueueMsgStorage[0], &xStaticQueue);
-	//timerSabotage = xTimerCreateStatic("sab", pdMS_TO_TICKS(TIMER_SABOTAGE +50), pdFALSE, NULL, sabotageCallback, &xTimerSabBuffer); 
+	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
 	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_timer, false));
-	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL, [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
+	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL,  [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	nvs_read_sets();
 	SPIFFS.begin();
@@ -25,14 +24,14 @@ extern "C" void app_main() {
 	bot.attachUpdate(updateHandler);
 	bot.skipUpdates(-2);
 	bot.setPollMode(fb::Poll::Long, 30000);
-	botSend.client.setHandshakeTimeout(5);bot.client.setHandshakeTimeout(10);
+	botSend.client.setHandshakeTimeout(5);bot.client.setHandshakeTimeout(15);
 	send_alarm_time(Message("", CHAT_ID), bot, false);
+	vTaskPrioritySet(xTaskGetCurrentTaskHandle(), 12);
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
-
 
 void mainTask(void*) {
 	for (TickType_t lastTry = 0;; led_blink()) {//CHANGED
@@ -42,22 +41,23 @@ void mainTask(void*) {
 			if(send_alarm_time()) Flag = CHECK_MSG; lastTry = xTaskGetTickCount(); log_i("%u", Flag);
 		}
 		case CHECK_MSG:
-			if (wifi_sta_init()) { bot.tick(); } //log_v("");
-			delay(300); continue;
+			delay(300);
+			if (wifi_sta_init()) { bot.tick(); } continue;
 		case WIFI_DISCONNECT: time_sync(); WiFi.disconnect();
 			ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(60 * 60 * 1000));
-		case WIFI_RECON: if (wifi_sta_init()) { bot.tickManual(); } continue;
+		case WIFI_RECON: 
+			if (wifi_sta_init()) { bot.tickManual(); } continue;
 		case WIFI_INIT: WiFi.begin(Auth->ssid, Auth->pass);
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
-		case RESTART: yield(); bot.tickManual(); esp_restart();
-		default: delay(1000); Flag = CHECK_MSG;
+		case RESTART: vTaskDelay(1); bot.tickManual(); esp_restart();
+		default: Flag = CHECK_MSG;
 		}
 	}
 }
 
 void sendTask(void*) {
-	Message msg("", CHAT_ID); tgMsg_t event; 
+	Message msg("", CHAT_ID); tgMsg_t event;
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
 			AutoLed<PIN_LED> led; 
@@ -269,10 +269,11 @@ void wifi_server_init() {
 		request->send(200, "text/plain", "Alarm off"); alarm_off();
 		});
 	server.on(CHANGE_AUTH, HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(SPIFFS, "/config.html", "text/html");
+		auto response = request->beginResponse(SPIFFS, CHANGE_FAILE_PATH, "text/html");
+		response->addHeader(asyncsrv::T_Content_Encoding, "gzip", false); 
+		request->send(response);
 		});
 	server.on(CHANGE_AUTH, HTTP_POST, onConfigRequest);
-
 #if defined RELAY
 	server.on(RELAY_ON, HTTP_GET, [](AsyncWebServerRequest* request) {
 		dWrite(PIN_RELAY, HIGH); request->send(200, "text/plain", "RELAY ON");
