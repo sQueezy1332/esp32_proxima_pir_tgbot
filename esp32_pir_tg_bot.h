@@ -22,6 +22,7 @@
 #define NO_BLE
 #endif
 #define FIRST_BUILD
+#define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #include "OTAserver.h"
 #include "credentials.h"
 //#include "BLE_api.h"
@@ -105,7 +106,7 @@ StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
 TimerHandle_t timerInterrupt/* , timerSabotage */;
 gptimer_handle_t timer_sab;
 
-stat_t Flag = ok;
+volatile stat_t Flag = ok;
 __attribute__((unused)) stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
 uint64_t time_sync_unix;
