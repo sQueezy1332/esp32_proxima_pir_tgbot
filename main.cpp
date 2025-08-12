@@ -3,15 +3,17 @@
 extern "C" void app_main() {
 	main_init();//nvs_func();
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
-	pinMode(PIN_LED_D5, PULLUP | OUTPUT); pinMode(PIN_BUTTON, INPUT);//pinMode(PIN_RELAY, OUTPUT);
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
 	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_timer, false));
-	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL,  [](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
+	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL,
+		[](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	nvs_read_sets();
 	SPIFFS.begin();
 #ifndef FIRST_BUILD
+	pinMode(PIN_LED_D5, PULLUP | OUTPUT); pinMode(PIN_BUTTON, INPUT);//pinMode(PIN_RELAY, OUTPUT);
+	dWrite(PIN_PWR_BUTTON, 1); pinMode(PIN_PWR_BUTTON, OUTPUT_OPEN_DRAIN);
 	WiFi.mode(WIFI_MODE_STA);
 #else
 	wifi_ap_init();
@@ -24,25 +26,26 @@ extern "C" void app_main() {
 	bot.attachUpdate(updateHandler);
 	bot.skipUpdates(-2);
 	bot.setPollMode(fb::Poll::Long, 30000);
-	botSend.client.setHandshakeTimeout(5);bot.client.setHandshakeTimeout(15);
+	botSend.client.setHandshakeTimeout(5); bot.client.setHandshakeTimeout(15);
 	send_alarm_time(Message("", CHAT_ID), bot, false);
-	vTaskPrioritySet(xTaskGetCurrentTaskHandle(), 12);
+	//vTaskPrioritySet(NULL, 12);
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
+	vTaskSuspend(loopTaskHandle);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
 	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	vTaskResume(loopTaskHandle);
 }
 
-void mainTask(void*) {
-	for (TickType_t lastTry = 0;; led_blink()) {//CHANGED
+void mainTask(void*) { 
+	for (TickType_t lastTry = 0;; /* led_blink() */ ) {//CHANGED
 		switch (Flag) {
 		case RESEND_MSG: 
-		if(xTaskGetTickCount() - lastTry > pdMS_TO_TICKS(15 * 60 * 1000)) {
+		if (xTaskGetTickCount() - lastTry > pdMS_TO_TICKS(15 * 60 * 1000)) {
 			if(send_alarm_time()) Flag = CHECK_MSG; lastTry = xTaskGetTickCount(); log_i("%u", Flag);
 		}
-		case CHECK_MSG:
-			delay(300);
-			if (wifi_sta_init()) { bot.tick(); } continue;
+		case CHECK_MSG: { delay(300); AutoLed <PIN_LED_D5> led;
+			if (wifi_sta_init()) { bot.tick(); } } continue;
 		case WIFI_DISCONNECT: time_sync(); WiFi.disconnect();
 			ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(60 * 60 * 1000));
 		case WIFI_RECON: 
@@ -51,7 +54,7 @@ void mainTask(void*) {
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: vTaskDelay(1); bot.tickManual(); esp_restart();
-		default: Flag = CHECK_MSG;
+		default: vTaskDelay(1); ESP_LOGI("main",""); Flag = CHECK_MSG;
 		}
 	}
 }
@@ -71,7 +74,7 @@ void sendTask(void*) {
 				msg.text.concat('\t'); msg.text.concat(event.delta);
 				_OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000)); tick = xTaskGetTickCount();
-				log_i("%s", msg.text.c_str()); if(!dRead(PIN_BUTTON)) goto save;
+				log_i("%s", msg.text.c_str()); //if(!dRead(PIN_BUTTON)) goto save;
 				if (botSend.sendMessage(msg)) {
 					if(Flag > CHECK_MSG) resumeTask(); log_v(""); 
 					continue;
@@ -151,7 +154,7 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 		goto try_send;
 	}ptr = str.begin();
 	for (offset = 0; offset < str_len && file.available();) {
-		file.read((byte*)&timestamp, sizeof(time_t)); //DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
+		file.read((byte*)&timestamp, sizeof(time_t)); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
 		timeinfo = localtime(&timestamp);  //localtime_r() do same
 		strftime(&ptr[offset], 9, "%H:%M:%S", timeinfo);
 		offset += 8;
@@ -193,7 +196,7 @@ bool writeFile(cch* path, const String& Content) {
 	fs::File file = SPIFFS.open(path, FILE_WRITE);
 	if (!file) { DEBUGLN(" failed to open file for writing"); }
 	else if (file.print(Content)) {
-		DEBUGLN(" file written");
+		DEBUGLN(" written");
 		return true;
 	}
 	else {DEBUGLN(" write failed");}
@@ -205,7 +208,7 @@ bool appendFile(cch* path, time_t value) {
 	fs::File file = SPIFFS.open(path, FILE_APPEND);
 	if (!file) { DEBUGLN(" failed to open file for writing"); }
 	else if (file.write((byte*)&value, sizeof(time_t))) {
-		DEBUGLN(" file written");
+		DEBUGLN(" written");
 		return true;
 	}
 	else {DEBUGLN(" write failed");}
@@ -218,7 +221,7 @@ bool deleteFile(cch* path) {
 		DEBUGLN(" delete failed");
 		return false;
 	}
-	DEBUGLN(" file deleted");
+	DEBUGLN(" deleted");
 	return true;
 }
 /*		WIFI	*/
@@ -270,7 +273,7 @@ void wifi_server_init() {
 		});
 	server.on(CHANGE_AUTH, HTTP_GET, [](AsyncWebServerRequest* request) {
 		auto response = request->beginResponse(SPIFFS, CHANGE_FAILE_PATH, "text/html");
-		response->addHeader(asyncsrv::T_Content_Encoding, "gzip", false); 
+		response->addHeader(asyncsrv::T_Content_Encoding, "gzip");
 		request->send(response);
 		});
 	server.on(CHANGE_AUTH, HTTP_POST, onConfigRequest);
@@ -345,7 +348,7 @@ void handleMessage(fb::Update& u) {
 	case SH("/invalid"): esp_ota_mark_app_invalid_rollback_and_reboot(); return;
 	case SH("/pir_reset"):
 		 pir_reset(); msg.text = "Done"; break;
-	case SH("/bot_kill"): {memset((void*)&bot, 0x0, sizeof(botSend)); } break;
+	case SH("/bot_kill"): {memset((void*)&bot, 0, sizeof(botSend)); } break;
 	//case SH("/die"): Flag = PANIC; msg.text = "/die"; break;
 		//case SH("/ota_invalidate"):
 		//msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
@@ -358,7 +361,9 @@ void handleMessage(fb::Update& u) {
 		dWrite(PIN_RELAY, LOW); msg.text = "RELAY OFF"; break;
 #endif
 	case SH("/pwr"):
-		dWrite(PIN_PWR_BUTTON, 0); delay(100); dWrite(PIN_PWR_BUTTON, 1); msg.text = "pwr_btn"; break;
+	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(100), pdFALSE, NULL, 
+	[](TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }), 0))
+	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; } break;
 	case SH("/pwr_push"):
 	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(10'000), pdFALSE, NULL, 
 	[](TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }), 0))
@@ -411,7 +416,7 @@ void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
 	if (fetch) {
 		if ((fetch.*updater)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
 		else { msg.text = "Error = "; msg.text += Update.getError();msg.text += '\n';
-			msg.text += "esp_err = "; msg.text += update_error; update_error = 0;} 
+			msg.text += "esp_err = 0x"; msg.text += String(update_error, HEX); update_error = 0;} 
 	}
 	else { msg.text = "Download error"; }
 	log_i("%s", msg.text.c_str());
@@ -452,8 +457,8 @@ void read_credentials() {
 
 void nvs_read_sets() {
 	
-	auto ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvsHandle);
-	ret = nvs_get_u32(nvsHandle, "sets", reinterpret_cast<uint32_t*>(&sets));
+	auto ret = nvs_open(NVS_WIFISPACE, NVS_READONLY, &nvsHandle);
+	ret = nvs_get_u32(nvsHandle, NVS_KEY, reinterpret_cast<uint32_t*>(&sets));
 	if (ret != ESP_OK) { if (ret == ESP_ERR_NVS_NOT_FOUND) {} goto error; }
 	if (crc8_le(0, (byte*)&sets, 3) != sets.crc) { log_w("crc err. Value = 0x%X", sets); goto error; }
 	sets.alarm ? alarm_on(false) : alarm_off(false);
@@ -462,9 +467,9 @@ error: alarm_on(false); nvs_write_sets(nvsHandle);
 }
 
 void nvs_write_sets(nvs_handle_t nvs) {
-	nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+	nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs);
 	sets.crc = crc8_le(0, (byte*)&sets, 3); log_d("%u, %u", sets.alarm, sets.crc);
-	nvs_set_u32(nvs, "sets", reinterpret_cast<uint32_t&>(sets));
+	nvs_set_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t&>(sets));
 	nvs_close(nvs);
 }
 
@@ -505,11 +510,13 @@ void alarm_off(bool write) {
 }
 
 void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
-	size_t i = 0, str_size = data_size * 3;
-	if (!str.reserve(str_size)) return; char* ptr = str.begin();
-	if(str_size >= 15) reinterpret_cast<uint32_t*>(&str)[2] = str_size;
-	else { byte *field = reinterpret_cast<byte*>(&str) + 15; *field = (*field & 0x80) | (str_size & 0x7F);} log_d("%u", str.length());
-	for (byte shift, nibble, num;;*ptr++ = ' ') {
+	size_t str_size = data_size * 3;
+	if (!str.reserve(str_size)) return; //log_d("%u", str.isSSO());
+	char* ptr = str.begin(); if(!ptr) { log_d("NULL"); return; }
+	byte *field = reinterpret_cast<byte*>(&str) + (sizeof(String) -1); static_assert(sizeof(String) == 16);
+	if((*field & 0x80) == 0) reinterpret_cast<uint32_t*>(&str)[2] = str_size; //NOT SSO
+	else { *field = (str_size | 0x80); } 
+	for (byte i = 0, shift, nibble, num;;*ptr++ = ' ') {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
 			*ptr++ = nibble < 10 ? nibble ^ 0x30 : nibble + ('A' - 10);
@@ -517,13 +524,14 @@ void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
 		} 
 		if (++i >= data_size) break;
 	}*ptr = '\0';
+	log_d("str.length: %u, data_size: %u", str.length(), data_size);
 }
 
-byte strtoB(const String& str, byte*& buf, byte sub, bool heap)  {
+bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap) { 
 	size_t str_len = str.length() - sub, hex_len = (str_len + 1) / 2; log_d("hex_len = %u", hex_len);
 	if (hex_len < 4 || hex_len > 255) return false;
 	byte i = 0; cch* ptr = str.c_str() + sub;
-	byte* _buf = (byte*)realloc(buf, hex_len); if (buf == NULL) return false; buf = _buf;
+	byte* _buf = (byte*)realloc(buf, hex_len); if (_buf == NULL) return false; buf = _buf;
 	for (byte ready = 0, result = 0; *ptr; ++ptr) {
 		switch (*ptr) {
 		case '0'... '9':
@@ -545,7 +553,6 @@ byte strtoB(const String& str, byte*& buf, byte sub, bool heap)  {
 			result = 0; ready = 0;
 		}
 		else ready = 1;
-	}
-	__unused void * temp = realloc(buf, i);
-	return i;
+	}data_size = i;
+	return realloc(buf, i);
 }
