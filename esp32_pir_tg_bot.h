@@ -5,10 +5,15 @@
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough" 
 #pragma GCC diagnostic ignored "-Woverloaded-virtual" 
 //#pragma GCC diagnostic ignored "-Wextra" 
+#pragma GCC diagnostic ignored "-Wunused-label"
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
 #define _USE_32BIT_TIME_T
+//#define FIRST_BUILD
 #define MBEDTLS_DEBUG_C
+#define CONFIG_ASYNC_TCP_STACK_SIZE 8192
+#define CONFIG_ASYNC_TCP_USE_WDT 0
+#include <AsyncTCP.h>
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE
 #include "ESP_MAIN.h"
@@ -21,18 +26,15 @@
 //#warning "Not compatible hardware"
 #define NO_BLE
 #endif
-#define FIRST_BUILD
-#define CONFIG_ASYNC_TCP_STACK_SIZE 8192
-#define CONFIG_ASYNC_TCP_USE_WDT 0
+static_assert(sizeof(time_t) == 4);
 #include "OTAserver.h"
 #include "credentials.h"
 //#include "BLE_api.h"
-static_assert(sizeof(time_t) == 4);
 #define ESP32C3_LUATOS
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_PWR_BUTTON 8
+#define PIN_PWR_BUTTON 7
 #define PIN_RELAY 10
 #define PIN_LINE 4
 #if defined ESP32C3_LUATOS
@@ -72,7 +74,6 @@ static_assert(sizeof(time_t) == 4);
 #define timer_restart_impl() timer_restart(timer_sab) //xTimerResetFromISR(timerSabotage, NULL);
 #define timer_start_impl() {timer_restart(timer_sab); gptimer_start(timer_sab);}//xTimerStart(timerSabotage, 0);
 #define timer_stop_impl() gptimer_stop(timer_sab)//xTimerStop(timerSabotage, 0);
-
 using fb::Message, fb::Fetcher;
 
 typedef enum : uint8_t {
@@ -152,7 +153,7 @@ void updateHandler(fb::Update& u);
 void handleMessage(fb::Update& u);
 void handleDocument(fb::Update& u);
 void otaBegin(fb::Update& u, bool (Fetcher::*)());
-byte strtoB(const String& str, byte*& buf, byte sub = 0, bool heap = true);
+bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub = 0, bool heap = true);
 void create_hex_string(String& str, cbyte* buf, cbyte data_size);
 String create_hex_string(cbyte* buf, cbyte data_size) {
 	String str; create_hex_string(str,buf,data_size); return str;
@@ -195,11 +196,10 @@ struct AutoLed {
 };
 
 inline void led_blink() {
-#ifdef DEBUG_ENABLE 
+#if not defined FIRST_BUILD
 	static bool state = false;
-
+	dWrite(PIN_LED_D5, state = !state);
 #endif
-dWrite(PIN_LED_D5, state = !state);
 }
 
 bool verifyRollbackLater() { return true; };
@@ -244,7 +244,7 @@ void nvs_func() {
 		partArr.push_back(esp_partition_get(i));
 		i = esp_partition_next(i);
 	}log_i("partition count: %u", partArr.size());
-	for (auto& var : partArr) { DEBUGF("Partition label %s, size %lu, address 0x%lX\n", var->label, var->size, var->address); }
+	for (__unused auto& var : partArr) { DEBUGF("Partition label %s, size %lu, address 0x%lX\n", var->label, var->size, var->address); }
 	esp_partition_iterator_release(i); }
 
 	nvs_get_stats(NULL, &nvs_stats);
@@ -277,7 +277,7 @@ void nvs_func() {
 
 void read_credentials_v() {
 	char ssid[36], pass[65]; size_t ssid_s = sizeof(pass), pass_s = sizeof(pass); nvs_handle_t nvs = 0;
-	CHECK_RET(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs));
 	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_SSID, ssid, &ssid_s));
 	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_PASS, pass, &pass_s));
 	ssid_s = strlen(ssid + 4); pass_s = strlen(pass);
@@ -299,7 +299,7 @@ void read_credentials_v() {
 }
 
 void nvs_wifi_erase(nvs_handle_t nvs = 0) {
-	CHECK_RET(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs));
 	CHECK_RET(nvs_erase_all(nvs));
 }
 
