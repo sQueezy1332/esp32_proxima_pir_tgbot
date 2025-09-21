@@ -33,8 +33,7 @@ extern "C" void app_main() {
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	vTaskSuspend(loopTaskHandle);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
-	vTaskResume(loopTaskHandle);
+	vTaskResume(loopTaskHandle);log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void mainTask(void*) { 
@@ -254,9 +253,10 @@ void wifi_server_init() {
 		request->send(404, "text/plain", "Not found");
 		});
 	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) { String str;
-		if(Auth == nullptr) { str = "Auth empty";}
-		else { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n"; } 
-		request->send(200, "text/plain", str); resumeTask(WIFI_INIT);
+		if(Auth) { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n";
+			resumeTask(WIFI_INIT); }
+		else { str = "Auth empty"; } 
+		request->send(200, "text/plain", str); 
 		});
 	server.on("/disconnect", HTTP_GET, [](AsyncWebServerRequest* request) {
 		request->send(200, "text/plain", "Disconnecting..."); resumeTask(WIFI_DISCONNECT);
@@ -314,13 +314,13 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 	String log; log.reserve(128);
 	//DEBUGF("POST[%s]: %s\n", pSSID->name().c_str(), pSSID->value().c_str(), pPASS->name().c_str(), pPASS->value().c_str());
 	log += "SSID = ["; log += Auth->ssid; log += "]\n"; log += "PASS = ["; log += Auth->pass; log += "]\n";
-	log += "Done. Connecting with new credentials"; DEBUGLN(log);
+	log += "Done. Go to ""/connect"; DEBUGLN(log);
 	request->send(200, "text/plain", log);
-	resumeTask(WIFI_INIT);
+	//resumeTask(WIFI_INIT);
 }
 /*		TELEGRAM	*/
 void handleMessage(fb::Update& u) {
-	Message msg; msg.chatID = u.message().chat().id(); DEBUGLN(u.message().text());
+	Message msg("",u.message().chat().id()); DEBUGLN(u.message().text());
 	switch (u.message().text().hash()) {
 	case SH("/connect"):
 		Flag = CHECK_MSG; msg.text = "Stay connected"; break;
@@ -361,12 +361,10 @@ void handleMessage(fb::Update& u) {
 		dWrite(PIN_RELAY, LOW); msg.text = "RELAY OFF"; break;
 #endif
 	case SH("/pwr"):
-	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(100), pdFALSE, NULL, 
-	[](TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }), 0))
+	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(100), pdFALSE, NULL, timer_button), 0))
 	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; } break;
 	case SH("/pwr_push"):
-	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(10'000), pdFALSE, NULL, 
-	[](TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }), 0))
+	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(10'000), pdFALSE, NULL, timer_button), 0))
 	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; msg.text += " push"; } break;
 	case SH("/pwr_up"):
 		dWrite(PIN_PWR_BUTTON, 1); msg.text = "pwr_btn"; msg.text += " release"; break;
@@ -382,17 +380,29 @@ void handleMessage(fb::Update& u) {
 		else msg.text = String(ret, HEX);
 	} break;
 	default: {
-		if (u.message().text().startsWith(BLE_SET)) {
+		/* if (u.message().text().startsWith(BLE_SET)) {
 			if (strtoB(u.message().text(), ble_data, ble_data_size, sizeof(BLE_SET))) {
 				create_hex_string(msg.text, ble_data, ble_data_size);
 			}
 			else msg.text = "Wrong format";
+		} 
+		else*/ if (u.message().text().startsWith(PIN_GEN)) {
+			uint32_t pin = generate_pin(u.message().text().str() + sizeof(PIN_PASS_SET)/*-1*/,u.message().text().length(), pin_pass);
+			msg.text = pin;
+		}
+		else if (u.message().text().startsWith(PIN_PASS_SET)) {
+			if(u.message().text().length() > sizeof(PIN_PASS_SET) + 42) { msg.text = "too much size";} 
+			else {
+				pin_pass = u.message().text().str() + sizeof(PIN_PASS_SET); //with space
+				msg.text = "password changed to: ";  msg.text += pin_pass;//sizeof(Text) 
+				msg.text += '\n'; msg.text += "pin_pass_len = "; msg.text += pin_pass.length();
+			}
 		}
 		else { msg.text = "Unknown"; }
 	}
 #else
 	default: msg.text = "Unknown";
-#endif 
+#endif
 	}DEBUGLN(msg.text);
 	bot.sendMessage(msg);
 }
@@ -494,9 +504,7 @@ String get_info(bool ver) {
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
 		str += ("\nCompiled: " __DATE__ "\t" __TIME__ "\n");
-		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) {
-			str += "ESP_OTA_IMG_PENDING_VERIFY";
-		}
+		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "ESP_OTA_IMG_PENDING_VERIFY"; }
 	} log_d("%u", str.length());
 	return str;
 }
@@ -510,7 +518,7 @@ void alarm_off(bool write) {
 }
 
 void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
-	size_t str_size = data_size * 3;
+	const size_t str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; //log_d("%u", str.isSSO());
 	char* ptr = str.begin(); if(!ptr) { log_d("NULL"); return; }
 	byte *field = reinterpret_cast<byte*>(&str) + (sizeof(String) -1); static_assert(sizeof(String) == 16);
@@ -535,13 +543,10 @@ bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap
 	for (byte ready = 0, result = 0; *ptr; ++ptr) {
 		switch (*ptr) {
 		case '0'... '9':
-			if (result & 0xf) result <<= 4;
 			result |= (*ptr ^ 0x30); break;
 		case 'A'... 'F':
-			if (result & 0xf) result <<= 4;
 			result |= *ptr - 55; break;
 		case 'a' ...'f' :
-			if (result & 0xf) result <<= 4;
 			result |= *ptr - 87; break;
 		default:
 			if (ready) goto rdy;
@@ -552,7 +557,30 @@ bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap
 			if (++i >= hex_len) break;
 			result = 0; ready = 0;
 		}
-		else ready = 1;
+		else { ready = 1; result <<= 4;};
 	}data_size = i;
 	return realloc(buf, i);
+}
+
+uint32_t generate_pin(const char *str, byte name_len, String &pass) {
+    //const byte name_len = strlen(str); 
+	const byte pass_len = pass.length();
+	if(!str || !pass.c_str() ) return 0;
+    byte shaResult[32];
+    byte payload[name_len + pass_len];
+    mbedtls_md_context_t ctx {};
+    memcpy(payload, str, name_len);
+    memcpy(payload + name_len, pass.c_str(), pass_len);
+    DEBUGLN((char*)payload);DEBUGF("name_len = %u; ""payloadLen = %u\n", name_len, pass_len);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&ctx);
+    mbedtls_md_update(&ctx, payload,  name_len + pass_len);
+    mbedtls_md_finish(&ctx, shaResult);
+    mbedtls_md_free(&ctx);
+    DEBUG("Hash: "); for (byte i = 0; i < sizeof(shaResult); i++) { DEBUGF("%02x", shaResult[i]);} DEBUGLN();
+    uint32_t crcResult = crc32_le(0, shaResult, sizeof(shaResult));
+    DEBUGF("crcResult = %lu\n", crcResult);
+    crcResult = 1000 + crcResult % 999000;
+    DEBUGF("pin = %lu\n", crcResult);// return 100000 + esp_random() % 900000,
+    return crcResult;
 }
