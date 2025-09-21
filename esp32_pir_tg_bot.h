@@ -21,6 +21,7 @@
 #include "SPIFFS.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
+//#include "mbedtls/md.h"
 //#include "time.h"
 #ifndef CONFIG_SOC_BLE_50_SUPPORTED
 //#warning "Not compatible hardware"
@@ -34,7 +35,7 @@ static_assert(sizeof(time_t) == 4);
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_PWR_BUTTON 7
+#define PIN_PWR_BUTTON 6
 #define PIN_RELAY 10
 #define PIN_LINE 4
 #if defined ESP32C3_LUATOS
@@ -120,6 +121,7 @@ sets_t sets;
 auth_t* Auth = nullptr;
 byte* ble_data = nullptr;
 byte ble_data_size = 0;
+String pin_pass;
 esp_err_t update_error = ESP_OK;
 FastBot2 bot(BOT_TOKEN);
 FastBot2 botSend(BOT_TOKEN);
@@ -158,6 +160,8 @@ void create_hex_string(String& str, cbyte* buf, cbyte data_size);
 String create_hex_string(cbyte* buf, cbyte data_size) {
 	String str; create_hex_string(str,buf,data_size); return str;
 };
+uint32_t generate_pin(const char *str, byte name_len, String& pass);
+void timer_button(TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }
 
 void nvs_read_sets();
 void nvs_write_sets(nvs_handle_t nvs = 0);
@@ -180,6 +184,8 @@ void ota_progress(size_t progress, size_t size) {
 		DEBUG("OTA Progress bytes: "); DEBUGLN(progress);
 	}
 }
+
+
 
 void pir_reset() {
 	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3);  dWrite(PIN_LINE, 0); //OPEN_DRAIN
