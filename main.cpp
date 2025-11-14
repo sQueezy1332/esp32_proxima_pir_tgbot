@@ -5,9 +5,10 @@ extern "C" void app_main() {
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE,INPUT_PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
-	CHECK_(timer_init(TIMER_SABOTAGE, timer_sab, sabotage_timer, false));
-	timerInterrupt = xTimerCreateStatic("intr", pdMS_TO_TICKS(200), pdFALSE, NULL,
-		[](TimerHandle_t xTimer) {enableInterrupt(PIN_LINE);}, &xTimerIntrBuffer);
+	timer_sab = timer_init(TIMER_SABOTAGE, sabotage_timer);
+	timer_pwr = esp_timer_init([](void* ) { dWrite(PIN_PWR_BUTTON, 1); } ); 
+	timer_intr = esp_timer_init([](void*) { enableInterrupt(PIN_LINE); } ); 
+	assert(timer_pwr && timer_sab && timer_intr);
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	nvs_read_sets();
 	SPIFFS.begin();
@@ -68,7 +69,8 @@ void sendTask(void*) {
 				case ALARM: msg.text = "ALARM"; break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case LINE_LOW:  msg.text = "LINE_LOW";  break;
-				default: msg.text = "OK"; if(event.counter) timer_alarm(TIMER_SABOTAGE, timer_sab); goto _OK;
+				default: msg.text = "OK"; if(event.counter) { CHECK_(timer_alarm(timer_sab, TIMER_SABOTAGE)); ; }
+					goto _OK;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
 				_OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
@@ -115,12 +117,13 @@ static void isr_handler(/*void**/) {
 	uint32_t delta = time - last_interrupt; tgMsg_t tmp;
 	last_interrupt = time; //interrupt_delta = delta; 
 	if (delta < 2400000 /*&& delta > 10000*/) {
-		if (delta < 10000) { disableInterrupt(PIN_LINE); xTimerStartFromISR(timerInterrupt, NULL); }
+		if (delta < 10000) { disableInterrupt(PIN_LINE); esp_timer_start_once(timer_intr, 1000 * 200); } 
 		tmp.status = ALARM; tmp.delta = (uint16_t)(delta / 1000);
 	}
 	else if (last_state == ok) return;
-	else { tmp.status = ok; tmp.counter = (last_state > ALARM) ? 1 : 0;} //isr_log_d("%u", tmp.status);
-	last_state = tmp.status;
+	else { tmp.status = ok; tmp.counter = (last_state > ALARM) ? 1 : 0;
+	} //isr_log_d("%u", tmp.status);
+	last_state = tmp.status; 
 	xQueueSendFromISR(QueueMsgHandle, &tmp, NULL);//sizeof(tgMsg_t)
 }
 
@@ -346,8 +349,8 @@ void handleMessage(fb::Update& u) {
 	case SH("/valid"):
 		msg.text = (int)img_state(true); break;
 	case SH("/invalid"): esp_ota_mark_app_invalid_rollback_and_reboot(); return;
-	case SH("/pir_reset"):
-		 pir_reset(); msg.text = "Done"; break;
+	/* case SH("/pir_reset"):
+		 pir_reset(); msg.text = "Done"; break; */
 	case SH("/bot_kill"): {memset((void*)&bot, 0, sizeof(botSend)); } break;
 	//case SH("/die"): Flag = PANIC; msg.text = "/die"; break;
 		//case SH("/ota_invalidate"):
@@ -361,10 +364,10 @@ void handleMessage(fb::Update& u) {
 		dWrite(PIN_RELAY, LOW); msg.text = "RELAY OFF"; break;
 #endif
 	case SH("/pwr"):
-	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(100), pdFALSE, NULL, timer_button), 0))
+	if(!esp_timer_start_once(timer_pwr, 100 * 1000))
 	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; } break;
 	case SH("/pwr_push"):
-	if(xTimerStart(xTimerCreate("", pdMS_TO_TICKS(10'000), pdFALSE, NULL, timer_button), 0))
+	if(!esp_timer_start_once(timer_pwr, 10 * 1000 * 1000))
 	{ dWrite(PIN_PWR_BUTTON, 0); msg.text = "pwr_btn"; msg.text += " push"; } break;
 	case SH("/pwr_up"):
 		dWrite(PIN_PWR_BUTTON, 1); msg.text = "pwr_btn"; msg.text += " release"; break;
@@ -458,7 +461,6 @@ void read_credentials() {
 	if (ssid_l < 1 || pass_l < 8) {
 		log_w("ssid len %u, pass len %u", ssid_l, pass_l);
   		config.sta.threshold.rssi = -127;
-  		config.sta.pmf_cfg.capable = true;
 		memcpy(config.sta.ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
 		memcpy(config.sta.password, DEFAULT_PASS, sizeof(DEFAULT_PASS));
 		esp_wifi_set_config(WIFI_IF_STA, &config);
@@ -466,21 +468,24 @@ void read_credentials() {
 }
 
 void nvs_read_sets() {
-	
-	auto ret = nvs_open(NVS_WIFISPACE, NVS_READONLY, &nvsHandle);
-	ret = nvs_get_u32(nvsHandle, NVS_KEY, reinterpret_cast<uint32_t*>(&sets));
-	if (ret != ESP_OK) { if (ret == ESP_ERR_NVS_NOT_FOUND) {} goto error; }
-	if (crc8_le(0, (byte*)&sets, 3) != sets.crc) { log_w("crc err. Value = 0x%X", sets); goto error; }
-	sets.alarm ? alarm_on(false) : alarm_off(false);
-	nvs_close(nvsHandle); return;
-error: alarm_on(false); nvs_write_sets(nvsHandle);
+	nvsApi nvs;
+    if(nvs.begin(NVS_WIFI_SPACE, NVS_READWRITE)) {
+        auto ret = nvs_get_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t*>(&sets)); //reinterpret_cast<uint32_t*>(&sets)
+        if (ret == ESP_OK) {
+            if (crc8_le(0, (byte*)&sets, 3) == sets.crc) { 
+	            sets.alarm ? alarm_on(false) : alarm_off(false);
+                return;
+            }
+            else { log_w("crc err. Value = 0x%02X", sets.crc); };
+        } else { CHECK_(ret); }
+    } alarm_on(false); nvs_write_sets(nvs);
 }
 
-void nvs_write_sets(nvs_handle_t nvs) {
-	nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs);
-	sets.crc = crc8_le(0, (byte*)&sets, 3); log_d("%u, %u", sets.alarm, sets.crc);
-	nvs_set_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t&>(sets));
-	nvs_close(nvs);
+void nvs_write_sets(nvsApi nvs) {
+	sets.crc = crc8_le(0, (byte*)&sets, 3); log_d("%u, %02X", sets.alarm, sets.crc);
+    auto ret = nvs_set_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t&>(sets));
+	if(ret == ESP_OK) { ret = nvs_commit(nvs); return; };
+    CHECK_(ret);
 }
 
 void get_task_list(String& str) {
@@ -564,13 +569,13 @@ bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap
 
 uint32_t generate_pin(const char *str, byte name_len, String &pass) {
     //const byte name_len = strlen(str); 
-	const byte pass_len = pass.length();
 	if(!str || !pass.c_str() ) return 0;
+	const byte pass_len = pass.length();
     byte shaResult[32];
     byte payload[name_len + pass_len];
     mbedtls_md_context_t ctx {};
     memcpy(payload, str, name_len);
-    memcpy(payload + name_len, pass.c_str(), pass_len);
+    memcpy(&payload[name_len], pass.c_str(), pass_len);
     DEBUGLN((char*)payload);DEBUGF("name_len = %u; ""payloadLen = %u\n", name_len, pass_len);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
     mbedtls_md_starts(&ctx);
