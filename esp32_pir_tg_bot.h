@@ -9,18 +9,21 @@
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
 #define _USE_32BIT_TIME_T
-//#define FIRST_BUILD
+//#define FIRST_BUILD 
 #define MBEDTLS_DEBUG_C
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #define CONFIG_ASYNC_TCP_USE_WDT 0
 #include <AsyncTCP.h>
 //#define USE_ESP_IDF_LOG
-//#define DEBUG_ENABLE
+//#define DEBUG_ENABLE 893750 891442
 #include "ESP_MAIN.h"
+#include "hwtimer.h"
+#include "esp_timer_api.h"
 #include "FastBot2.h"
 #include "SPIFFS.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
+//#include "esp_check.h"
 //#include "mbedtls/md.h"
 //#include "time.h"
 #ifndef CONFIG_SOC_BLE_50_SUPPORTED
@@ -93,8 +96,8 @@ typedef enum : uint8_t {
 
 typedef struct { stat_t status; byte counter; uint16_t delta; } tgMsg_t;
 
-typedef struct { unsigned alarm : 1, res : 23; byte crc; } sets_t;
-
+typedef struct { bool alarm , res , dummy; byte crc; } sets_t;
+static_assert(sizeof(sets_t) == 4);
 typedef struct { String ssid,pass; } auth_t;
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
@@ -105,8 +108,8 @@ uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticQueue_t xStaticQueue;
 QueueHandle_t QueueMsgHandle;
 
-StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
-TimerHandle_t timerInterrupt/* , timerSabotage */;
+//StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
+esp_timer_handle_t timer_intr, timer_pwr;
 gptimer_handle_t timer_sab;
 
 volatile stat_t Flag = ok;
@@ -161,10 +164,9 @@ String create_hex_string(cbyte* buf, cbyte data_size) {
 	String str; create_hex_string(str,buf,data_size); return str;
 };
 uint32_t generate_pin(const char *str, byte name_len, String& pass);
-void timer_button(TimerHandle_t xTimer) { dWrite(PIN_PWR_BUTTON, 1); xTimerDelete(xTimer, 0); }
 
 void nvs_read_sets();
-void nvs_write_sets(nvs_handle_t nvs = 0);
+void nvs_write_sets(nvsApi nvs = nvsApi(NVS_WIFI_SPACE, NVS_READWRITE));
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
 void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskNotify(loopTaskHandle,0,eNoAction); };
@@ -185,13 +187,11 @@ void ota_progress(size_t progress, size_t size) {
 	}
 }
 
-
-
-void pir_reset() {
+/* void pir_reset() {
 	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3);  dWrite(PIN_LINE, 0); //OPEN_DRAIN
 	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(60 * 1000), pdFALSE, NULL, [](TimerHandle_t xTimer) {
 		dWrite(PIN_LINE, 1); xTimerDelete(xTimer, 0);}), 0);
-}
+} */
 
 template<byte PIN, bool state = LED_ON>
 struct AutoLed {
@@ -240,7 +240,7 @@ esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& resul
 	return ret;
 }
 
-void nvs_func() {
+void nvs_test() {
 	esp_err_t err; void* buf = NULL; uint64_t result = 0; size_t _size = 0;
 	nvs_stats_t nvs_stats{}; nvs_handle_t nvs = 0;
 	nvs_iterator_t it = NULL; nvs_entry_info_t entry;
@@ -283,7 +283,7 @@ void nvs_func() {
 
 void read_credentials_v() {
 	char ssid[36], pass[65]; size_t ssid_s = sizeof(pass), pass_s = sizeof(pass); nvs_handle_t nvs = 0;
-	CHECK_RET(nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
 	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_SSID, ssid, &ssid_s));
 	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_PASS, pass, &pass_s));
 	ssid_s = strlen(ssid + 4); pass_s = strlen(pass);
@@ -305,7 +305,7 @@ void read_credentials_v() {
 }
 
 void nvs_wifi_erase(nvs_handle_t nvs = 0) {
-	CHECK_RET(nvs_open(NVS_WIFISPACE, NVS_READWRITE, &nvs));
+	CHECK_RET(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
 	CHECK_RET(nvs_erase_all(nvs));
 }
 
