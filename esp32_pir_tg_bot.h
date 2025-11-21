@@ -8,17 +8,15 @@
 #pragma GCC diagnostic ignored "-Wunused-label"
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
-#define _USE_32BIT_TIME_T
 //#define FIRST_BUILD 
 #define MBEDTLS_DEBUG_C
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #define CONFIG_ASYNC_TCP_USE_WDT 0
 #include <AsyncTCP.h>
+#define _USE_LONG_TIME_T
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE 893750 891442
 #include "ESP_MAIN.h"
-#include "hwtimer.h"
-#include "esp_timer_api.h"
 #include "FastBot2.h"
 #include "SPIFFS.h"
 #include "esp_wifi.h"
@@ -342,3 +340,4 @@ void sabotageCallback(TimerHandle_t xTimer) {
 	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
 	xQueueSend(QueueMsgHandle, &tmp, 0);
 }
+
