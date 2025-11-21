@@ -28,7 +28,7 @@ gptimer_handle_t timer_init(uint64_t value, gptimer_alarm_cb_t func, bool reload
 	}
 
 uint64_t timer_read(gptimer_handle_t handle) {
-	uint64_t value;
+	uint64_t value = 0;
 	esp_err_t ret = gptimer_get_raw_count(handle, &value);
 	ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
 	return value;
