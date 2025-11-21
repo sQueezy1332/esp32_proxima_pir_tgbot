@@ -121,55 +121,6 @@ inline void main_init() {
 #endif
 }
 
- void ARDUINO_ISR_ATTR pinMode(uint8_t pin, uint8_t mode) {
-	if (mode >= 32) { log_w("%u, %u", pin, mode); return; }
-	gpio_config_t conf = {
-		.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
-		.mode = (gpio_mode_t)(mode & GPIO_MODE_INPUT_OUTPUT_OD),	/*!<  GPIO mode: set input/output mode                     */
-		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
-		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
-		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
-	};
-	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
-}
- 
-/*  __attribute__((__always_inline__)) inline */ void digitalWrite(uint8_t pin, uint8_t val) {
-    if (!digitalPinCanOutput(pin)) return;
-    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
-	gpio_hal_set_level(&gpiohal, pin, val);
-} 
-
-int digitalRead(uint8_t pin) {
-	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
-	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
-}
-
-void attachInterruptArg(uint8_t pin, void(*userFunc )(void*), void* arg, int intr_type) {
-	if (pin >= SOC_GPIO_PIN_COUNT) return;// makes sure that pin -1 (255) will never work -- this follows Arduino standard
-	esp_err_t err = gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
-	if (err != ESP_OK) { log_e("IO %i ISR Service Failed To Start", pin); return; }
-	gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0b111));
-	if (intr_type & 0b1000) { gpio_wakeup_enable((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0b111)); }
-	gpio_isr_handler_add((gpio_num_t)pin, userFunc, arg);
-	gpio_hal_context_t gpiohal{ .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //FIX interrupts on peripherals outputs (eg. LEDC,...) 
-	gpio_hal_input_enable(&gpiohal, pin); //Enable input in GPIO register
-}
-
-void attachInterrupt(uint8_t pin, void(*handler)() , int mode) {
-	attachInterruptArg(pin, (void(*)(void*))handler, NULL, mode);
-}
-
-void detachInterrupt(uint8_t pin) {
-	gpio_intr_disable((gpio_num_t)pin);
-	gpio_wakeup_disable((gpio_num_t)pin);
-	gpio_isr_handler_remove((gpio_num_t)pin);  //remove handle and disable isr for pin
-}
-
-void enableInterrupt(uint8_t pin) { gpio_intr_enable((gpio_num_t)pin); }
-
-void disableInterrupt(uint8_t pin) { gpio_intr_disable((gpio_num_t)pin); }
-
-//xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE); 
 class nvsApi {
 private: nvs_handle_t _handle = 0;
 public:
@@ -251,5 +202,53 @@ inline uint64_t timer_read(gptimer_handle_t handle) {
 	ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
 	return value;
 }
+
+void ARDUINO_ISR_ATTR pinMode(uint8_t pin, uint8_t mode) {
+	if (mode >= 32) { log_w("%u, %u", pin, mode); return; }
+	gpio_config_t conf = {
+		.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
+		.mode = (gpio_mode_t)(mode & GPIO_MODE_INPUT_OUTPUT_OD),	/*!<  GPIO mode: set input/output mode                     */
+		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
+		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
+		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
+	};
+	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
+}
+ 
+/*  __attribute__((__always_inline__)) inline */ void digitalWrite(uint8_t pin, uint8_t val) {
+    if (!digitalPinCanOutput(pin)) return;
+    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+	gpio_hal_set_level(&gpiohal, pin, val);
+} 
+
+int digitalRead(uint8_t pin) {
+	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
+	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
+}
+
+void attachInterruptArg(uint8_t pin, void(*userFunc )(void*), void* arg, int intr_type) {
+	if (pin >= SOC_GPIO_PIN_COUNT) return;// makes sure that pin -1 (255) will never work -- this follows Arduino standard
+	esp_err_t err = gpio_install_isr_service((int)ARDUINO_ISR_FLAG);
+	if (err != ESP_OK) { log_e("IO %i ISR Service Failed To Start", pin); return; }
+	gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0b111));
+	if (intr_type & 0b1000) { gpio_wakeup_enable((gpio_num_t)pin, (gpio_int_type_t)(intr_type & 0b111)); }
+	gpio_isr_handler_add((gpio_num_t)pin, userFunc, arg);
+	gpio_hal_context_t gpiohal{ .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //FIX interrupts on peripherals outputs (eg. LEDC,...) 
+	gpio_hal_input_enable(&gpiohal, pin); //Enable input in GPIO register
+}
+
+void attachInterrupt(uint8_t pin, void(*handler)() , int mode) {
+	attachInterruptArg(pin, (void(*)(void*))handler, NULL, mode);
+}
+
+void detachInterrupt(uint8_t pin) {
+	gpio_intr_disable((gpio_num_t)pin);
+	gpio_wakeup_disable((gpio_num_t)pin);
+	gpio_isr_handler_remove((gpio_num_t)pin);  //remove handle and disable isr for pin
+}
+
+void enableInterrupt(uint8_t pin) { gpio_intr_enable((gpio_num_t)pin); }
+
+void disableInterrupt(uint8_t pin) { gpio_intr_disable((gpio_num_t)pin); }
 
 
