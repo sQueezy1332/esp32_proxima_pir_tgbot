@@ -14,4 +14,8 @@ esp_timer_handle_t esp_timer_init(esp_timer_cb_t cb, esp_timer_dispatch_t type, 
     if (ret != ESP_OK) { ESP_ERROR_CHECK_WITHOUT_ABORT(ret); return NULL; };
     return handle;
 }
-  
+
+esp_err_t esp_timer_start(esp_timer_handle_t handle, uint64_t period) {
+  if (esp_timer_is_active) return esp_timer_restart(handle, period);
+  else return esp_timer_start_once(handle, period); 
+}
