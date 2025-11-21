@@ -36,6 +36,7 @@ __attribute__((weak)) uint64_t getArduinoSetupWaitTime_ms(void) {
 }
 //xTaskCreateUniversal(loopTask, "loopTask", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE);
 void loopTask(void* pvParameters) {
+	delay(getArduinoSetupWaitTime_ms());
 #if !defined(NO_GLOBAL_INSTANCES) && !defined(NO_GLOBAL_SERIAL)
 	// sets UART0 (default console) RX/TX pins as already configured in boot or as defined in variants/pins_arduino.h
 	Serial0.setPins(gpioNumberToDigitalPin(SOC_RX0), gpioNumberToDigitalPin(SOC_TX0));
@@ -61,3 +62,4 @@ void loopTask(void* pvParameters) {
 	}
 }
 #endif
+
