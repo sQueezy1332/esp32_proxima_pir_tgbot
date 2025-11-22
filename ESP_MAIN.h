@@ -1,15 +1,17 @@
 #pragma once
 //#define DEBUG_ENABLE
+#ifndef ARDUINO_USB_CDC_ON_BOOT && (defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED))//CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+#define ARDUINO_USB_CDC_ON_BOOT 1
+#define ARDUINO_USB_MODE 1
+#endif 
 #include <Arduino.h>
 //#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
 #include "hal/gpio_hal.h"
 #include "esp_check.h"
-/* #if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED) && not defined ARDUINO_USB_CDC_ON_BOOT//CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
-#define ARDUINO_USB_CDC_ON_BOOT 1
-#define ARDUINO_USB_MODE 1
-#endif */
+#include "esp_timer.h"
+#include "driver/gptimer.h"
 #if defined CONFIG_AUTOSTART_ARDUINO
 #pragma message "CONFIG_AUTOSTART_ARDUINO"
 #endif
@@ -22,18 +24,27 @@
 
 #if defined(CONFIG_BLUEDROID_ENABLED) || defined(CONFIG_NIMBLE_ENABLED)
 #if CONFIG_IDF_TARGET_ESP32
-__weak_symbol bool btInUse() { return false; } //overwritten in esp32-hal-bt.c
+__weak_symbol inline bool btInUse() { return false; } //overwritten in esp32-hal-bt.c
 #else
 extern bool btInUse(); //from esp32-hal-bt.c
 #endif
 #endif
 
-/* #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG
+ #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG
 #define DEBUG_ENABLE
-#endif */
+#endif
 #ifdef DEBUG_ENABLE
 #include "chip-debug-report.h" 
 #pragma message "DEBUG_ENABLE"
+#if ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE  //Serial used from Native_USB_CDC | HW_CDC_JTAG
+#pragma message "HWCDC"
+inline HWCDC HWCDCSerial; 
+#elif ARDUINO_USB_CDC_ON_BOOT// !ARDUINO_USB_MODE -- Native USB Mode
+#pragma message "USBCDC"
+inline USBCDC USBSerial(0)
+#else 
+#pragma message "UART0" //definiton in HardwareSerial.cpp
+#endif  // !ARDUINO_USB_CDC_ON_BOOT -- Serial is used from UART0
 #define SerialBegin(x)  Serial.begin(x); //while(!Serial){}
 #define DEBUG(x, ...) Serial.print(x, ##__VA_ARGS__)
 #define DEBUGLN(x, ...) Serial.println(x, ##__VA_ARGS__)
@@ -61,7 +72,7 @@ inline esp_ota_img_states_t img_state(bool valid = false) {
 	esp_ota_img_states_t ota_state;
 	esp_ota_get_state_partition(running, &ota_state);
 	if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-		log_d("IMG_PENDING_VERIFY %s" , valid ? "valid" : "");
+		log_i("IMG_PENDING_VERIFY %s" , valid ? "valid" : "");
 		if(valid) esp_ota_mark_app_valid_cancel_rollback();
 	}
 	return ota_state;
@@ -141,7 +152,7 @@ public:
 	operator nvs_handle_t() const { return _handle; };
 };
 
-#include "esp_timer.h"
+
 
 inline esp_timer_handle_t 
 esp_timer_init( esp_timer_cb_t cb, esp_timer_dispatch_t type = ESP_TIMER_TASK, bool skip = false, void* arg = NULL, const char* name = NULL) {
@@ -162,10 +173,6 @@ inline esp_err_t esp_timer_start(esp_timer_handle_t handle, uint64_t period) {
   if (esp_timer_is_active(handle)) return esp_timer_restart(handle, period);
   return esp_timer_start_once(handle, period); 
 }
-
-#include "driver/gptimer.h"
-
-#define gptimer_restart(x) gptimer_set_raw_count(x, 0)
 
 inline esp_err_t 
 timer_alarm(gptimer_handle_t handle, uint64_t value, bool reload = false, uint64_t count = 0) {
@@ -194,7 +201,10 @@ timer_init(uint64_t value, gptimer_alarm_cb_t func, bool reload = false, uint8_t
 			|| (ret = timer_alarm(handle, value, reload))) 
 			{ ESP_ERROR_CHECK_WITHOUT_ABORT(ret); return NULL;}
 		return handle;
-	}
+}
+
+inline esp_err_t 
+gptimer_restart(gptimer_handle_t h) { return gptimer_set_raw_count(h, 0);}
 
 inline uint64_t timer_read(gptimer_handle_t handle) {
 	uint64_t value = 0;
