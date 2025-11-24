@@ -1,8 +1,13 @@
 #pragma once
+#include "sdkconfig.h"
 //#define DEBUG_ENABLE
-#ifndef ARDUINO_USB_CDC_ON_BOOT && (defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED))//CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+#if !defined(CONFIG_ESP_CONSOLE_NONE) && (defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED) || defined(CONFIG_ESP_CONSOLE_USB_CDC))// && defined //CONFIG_USJ_ENABLE_USB_SERIAL_JTAG
 #define ARDUINO_USB_CDC_ON_BOOT 1
+#if (CONFIG_ESP_CONSOLE_USB_CDC) && (CONFIG_TINYUSB_CDC_ENABLED)
+#define ARDUINO_USB_MODE 0
+#else
 #define ARDUINO_USB_MODE 1
+#endif
 #endif 
 #include <Arduino.h>
 //#include "esp_task_wdt.h"
@@ -49,21 +54,21 @@ inline USBCDC USBSerial(0)
 #define DEBUG(x, ...) Serial.print(x, ##__VA_ARGS__)
 #define DEBUGLN(x, ...) Serial.println(x, ##__VA_ARGS__)
 #define DEBUGF(x, ...) Serial.printf(x , ##__VA_ARGS__)
-#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x)
-#define CHECK_RET(x) ESP_RETURN_VOID_ON_ERROR(x)
 #else
 #define DEBUG(x, ...)
 #define DEBUGLN(x, ...) 
 #define DEBUGF(x, ...)
 #define SerialBegin(x)
-#define CHECK_(x) (void)(x)
-#define CHECK_RET(x) ESP_RETURN_VOID_ON_ERROR(x)//do {esp_err_t ret = (x); if (unlikely(ret != ESP_OK)) {return;} }while(0)
+//do {esp_err_t ret = (x); if (unlikely(ret != ESP_OK)) {return;} }while(0)
 #endif // DEBUG_ENABLE
+#define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x)
+#define CHECK_RET(x) ESP_RETURN_ON_ERROR(x, "","")
+#define CHECK_VOID(x) ESP_RETURN_VOID_ON_ERROR(x,"","")
 #define uS esp_timer_get_time()
 #define delayUntil(prev, tmr) vTaskDelayUntil((prev),pdMS_TO_TICKS(tmr))
-#define SEC (1000000)
-#define ENTER_CRITICAL() {portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux);
-#define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);}
+#define SEC (1000000ul)
+#define ENTER_CRITICAL() portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux);
+#define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);
 typedef const char cch; typedef const uint8_t cbyte; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
@@ -72,7 +77,7 @@ inline esp_ota_img_states_t img_state(bool valid = false) {
 	esp_ota_img_states_t ota_state;
 	esp_ota_get_state_partition(running, &ota_state);
 	if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
-		log_i("IMG_PENDING_VERIFY %s" , valid ? "valid" : "");
+		ESP_LOGI("img_state", "IMG_PENDING_VERIFY %s" , valid ? "valid" : "");
 		if(valid) esp_ota_mark_app_valid_cancel_rollback();
 	}
 	return ota_state;
@@ -107,7 +112,7 @@ inline void main_init() {
 #ifdef F_CPU
 	//setCpuFrequencyMhz(F_CPU / 1000000);
 #endif
-	SerialBegin(115200); DEBUGLN("Serial begin");
+	SerialBegin(115200); DEBUGLN("Serial.begin()");
 #if ARDUINO_USB_MSC_ON_BOOT && !ARDUINO_USB_MODE
 	MSC_Update.begin();
 #endif
@@ -148,7 +153,7 @@ public:
 		return ret;
 	};
 	void close() { if(_handle) { nvs_close(_handle); } };
-	~nvsApi() { close(); ESP_LOGD("NVS", "~_handle = %lu", _handle); };
+	~nvsApi() { close(); ESP_LOGV("NVS", "~_handle = %lu", _handle); };
 	operator nvs_handle_t() const { return _handle; };
 };
 
@@ -229,12 +234,14 @@ void ARDUINO_ISR_ATTR pinMode(uint8_t pin, uint8_t mode) {
     if (!digitalPinCanOutput(pin)) return;
     gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
 	gpio_hal_set_level(&gpiohal, pin, val);
-} 
+}
 
 int digitalRead(uint8_t pin) {
 	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
 	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
 }
+
+inline void digitalToggle(uint8_t pin) { digitalWrite(pin, !digitalRead(pin)); }
 
 void attachInterruptArg(uint8_t pin, void(*userFunc )(void*), void* arg, int intr_type) {
 	if (pin >= SOC_GPIO_PIN_COUNT) return;// makes sure that pin -1 (255) will never work -- this follows Arduino standard
