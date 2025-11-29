@@ -13,7 +13,6 @@
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #define CONFIG_ASYNC_TCP_USE_WDT 0
 #include <AsyncTCP.h>
-#define _USE_LONG_TIME_T
 //#define USE_ESP_IDF_LOG
 //#define DEBUG_ENABLE 893750 891442
 #include "ESP_MAIN.h"
@@ -60,6 +59,7 @@ static_assert(sizeof(time_t) == 4);
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #endif
+#define TAG "MAIN"
 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
 #define SEND_TASK_STACK_SIZE (8 * 1024)
@@ -73,8 +73,8 @@ static_assert(sizeof(time_t) == 4);
 #define Delay(x) vTaskDelay(pdMS_TO_TICKS(x))
 #define DelayUs(x) ets_delay_us(x)
 #define TIMER_SABOTAGE	2500'000
-#define timer_restart_impl() timer_restart(timer_sab) //xTimerResetFromISR(timerSabotage, NULL);
-#define timer_start_impl() {timer_restart(timer_sab); gptimer_start(timer_sab);}//xTimerStart(timerSabotage, 0);
+#define timer_restart_impl() gptimer_restart(timer_sab) //xTimerResetFromISR(timerSabotage, NULL);
+#define timer_start_impl() {gptimer_restart(timer_sab); gptimer_start(timer_sab);}//xTimerStart(timerSabotage, 0);
 #define timer_stop_impl() gptimer_stop(timer_sab)//xTimerStop(timerSabotage, 0);
 using fb::Message, fb::Fetcher;
 
@@ -94,7 +94,7 @@ typedef enum : uint8_t {
 
 typedef struct { stat_t status; byte counter; uint16_t delta; } tgMsg_t;
 
-typedef struct { bool alarm , res , dummy; byte crc; } sets_t;
+typedef struct { /* unsigned */bool alarm , res , dummy/* : 22 */; byte crc; } sets_t;
 static_assert(sizeof(sets_t) == 4);
 typedef struct { String ssid,pass; } auth_t;
 
@@ -206,7 +206,7 @@ inline void led_blink() {
 #endif
 }
 
-bool verifyRollbackLater() { return true; };
+//bool verifyRollbackLater() { return true; };
 
 esp_err_t nvsGet(nvs_handle_t handle, cch* key, nvs_type_t type, uint64_t& result, void*& buf, size_t* size = nullptr) {
 	esp_err_t ret = ESP_FAIL; size_t required_size; void* ptr;
@@ -281,17 +281,17 @@ void nvs_test() {
 
 void read_credentials_v() {
 	char ssid[36], pass[65]; size_t ssid_s = sizeof(pass), pass_s = sizeof(pass); nvs_handle_t nvs = 0;
-	CHECK_RET(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
-	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_SSID, ssid, &ssid_s));
-	CHECK_RET(nvs_get_blob(nvs, NVS_KEY_PASS, pass, &pass_s));
+	CHECK_VOID(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
+	CHECK_VOID(nvs_get_blob(nvs, NVS_KEY_SSID, ssid, &ssid_s));
+	CHECK_VOID(nvs_get_blob(nvs, NVS_KEY_PASS, pass, &pass_s));
 	ssid_s = strlen(ssid + 4); pass_s = strlen(pass);
 	if (ssid_s < 1 || pass_s < 8) {
 		log_w("ssid len %u, pass len %u", ssid_s, pass_s);
 		//memcpy(ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
 		//memcpy(pass, DEFAULT_PASS, sizeof(DEFAULT_PASS));
-		CHECK_RET(nvs_set_blob(nvs, NVS_KEY_SSID, DEFAULT_SSID, sizeof(DEFAULT_SSID)));
-		CHECK_RET(nvs_set_blob(nvs, NVS_KEY_PASS, DEFAULT_PASS, sizeof(DEFAULT_PASS)));
-		CHECK_RET(nvs_commit(nvs));
+		CHECK_VOID(nvs_set_blob(nvs, NVS_KEY_SSID, DEFAULT_SSID, sizeof(DEFAULT_SSID)));
+		CHECK_VOID(nvs_set_blob(nvs, NVS_KEY_PASS, DEFAULT_PASS, sizeof(DEFAULT_PASS)));
+		CHECK_VOID(nvs_commit(nvs));
 	}nvs_close(nvs);
 	/*|| esp_wifi_set_config(WIFI_IF_STA, &current_conf) != ESP_OK
 	if (!readFile(SSID_PATH, ssid) || ssid.length() == 0
@@ -303,8 +303,8 @@ void read_credentials_v() {
 }
 
 void nvs_wifi_erase(nvs_handle_t nvs = 0) {
-	CHECK_RET(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
-	CHECK_RET(nvs_erase_all(nvs));
+	CHECK_VOID(nvs_open(NVS_WIFI_SPACE, NVS_READWRITE, &nvs));
+	CHECK_VOID(nvs_erase_all(nvs));
 }
 
 static void IRAM_ATTR interrupt_handler_s() {
@@ -312,7 +312,7 @@ static void IRAM_ATTR interrupt_handler_s() {
 	uint64_t time = uS;
 	if (lineRead) return;
 	uint32_t delta = time - last_interrupt;
-	timer_restart(timer_sab);
+	gptimer_restart(timer_sab);
 	last_interrupt = time; interrupt_delta = delta;
 	if (delta < 2400000 /*&& delta > 100000*/) {
 		last_alarm_delta = delta; ++counter; isr_log_d("%u", counter);
@@ -340,4 +340,3 @@ void sabotageCallback(TimerHandle_t xTimer) {
 	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
 	xQueueSend(QueueMsgHandle, &tmp, 0);
 }
-
