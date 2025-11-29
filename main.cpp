@@ -8,7 +8,7 @@ extern "C" void app_main() {
 	timer_sab = timer_init(TIMER_SABOTAGE, sabotage_timer);
 	timer_pwr = esp_timer_init([](void* ) { dWrite(PIN_PWR_BUTTON, 1); } ); 
 	timer_intr = esp_timer_init([](void*) { enableInterrupt(PIN_LINE); } ); 
-	assert(timer_pwr && timer_sab && timer_intr);
+	assert(timer_sab && timer_intr && timer_pwr);
 	attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
 	nvs_read_sets();
 	SPIFFS.begin();
@@ -34,10 +34,11 @@ extern "C" void app_main() {
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	vTaskSuspend(loopTaskHandle);
 	bot.sendMessage(Message(get_info(true), CHAT_ID));
-	vTaskResume(loopTaskHandle);log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	vTaskResume(loopTaskHandle);
 }
 
-void mainTask(void*) { 
+void mainTask(void*) {
 	for (TickType_t lastTry = 0;; /* led_blink() */ ) {//CHANGED
 		switch (Flag) {
 		case RESEND_MSG: 
@@ -53,8 +54,8 @@ void mainTask(void*) {
 		case WIFI_INIT: WiFi.begin(Auth->ssid, Auth->pass);
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
-		case RESTART: vTaskDelay(1); bot.tickManual(); esp_restart();
-		default: vTaskDelay(1); ESP_LOGI("main",""); Flag = CHECK_MSG;
+		case RESTART: vTaskDelay(1); bot.tickManual(); esp_restart(); return;
+		default: vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
 		}
 	}
 }
@@ -85,7 +86,7 @@ void sendTask(void*) {
 					if (botSend.sendMessage(msg)) { tick = xTaskGetTickCount(); continue; }
 				} log_d("%u", ESP.getFreeHeap());
 			}
-			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected);
 save:		if (event.status != ok) { log_i("save");
 				appendFile(ALARM_PATH, timestamp_unix + ((uS - time_sync_unix) / 1000000));
 				if(Flag != RESEND_MSG) resumeTask(RESEND_MSG); 
@@ -99,7 +100,7 @@ void time_sync(byte wait_sec) {
 	time_t temp = 0;
 	for (;; --wait_sec) {
 		time(&temp);
-		if (temp > 1000000000) break;
+		if (temp > 0x40000000) break;
 		if (wait_sec == 0) {
 			DEBUGLN(" failed!"); return;
 		}
@@ -117,7 +118,7 @@ static void isr_handler(/*void**/) {
 	uint32_t delta = time - last_interrupt; tgMsg_t tmp;
 	last_interrupt = time; //interrupt_delta = delta; 
 	if (delta < 2400000 /*&& delta > 10000*/) {
-		if (delta < 10000) { disableInterrupt(PIN_LINE); esp_timer_start_once(timer_intr, 1000 * 200); } 
+		if (delta < 10000) { disableInterrupt(PIN_LINE); esp_timer_start_once(timer_intr, 1000 * 300); } 
 		tmp.status = ALARM; tmp.delta = (uint16_t)(delta / 1000);
 	}
 	else if (last_state == ok) return;
@@ -297,10 +298,10 @@ void wifi_server_init() {
 }
 
 void onWiFiConnected(arduino_event_id_t event) {
-	if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+	if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
 		WiFi.removeEvent(event_id); event_id = 0; log_d("");
 		resumeTask(RESEND_MSG);
-	}
+	} else { log_d( "%u", event); }
 }
 
 void onConfigRequest(AsyncWebServerRequest* request) {
@@ -329,9 +330,9 @@ void handleMessage(fb::Update& u) {
 		Flag = CHECK_MSG; msg.text = "Stay connected"; break;
 	case SH("/disconnect"):
 		Flag = WIFI_DISCONNECT; msg.text = "Disconnecting..."; break;
-	case SH("/alarm_on"):
+	case SH("/alarm"):
 		alarm_on(); msg.text = "Alarm on"; break;
-	case SH("/alarm_off"):
+	case SH("/alarm0"):
 		alarm_off(); msg.text = "Alarm off"; break;
 	case SH("/info"):
 		msg.text = std::move(get_info()); break;
@@ -340,8 +341,8 @@ void handleMessage(fb::Update& u) {
 	case SH("/restart"):
 		bot.reboot(); Flag = RESTART; msg.text = "Restarting..."; break;
 	case SH("/time_sync"):
-		time_sync_unix = uS; msg.text = u[tg_apih::date];
-		timestamp_unix = msg.text.toInt(); msg.text = "Done"; break;
+		time_sync_unix = uS;
+		timestamp_unix = u[tg_apih::date].toInt(); msg.text = "Done"; break;
 	case SH("/send_alarm"):
 		send_alarm_time(std::move(msg), bot); return;
 	case SH("/clear_alarm"):
@@ -469,14 +470,14 @@ void read_credentials() {
 
 void nvs_read_sets() {
 	nvsApi nvs;
-    if(nvs.begin(NVS_WIFI_SPACE, NVS_READWRITE)) {
+    if(nvs.begin(NVS_WIFI_SPACE, NVS_READWRITE) == ESP_OK) {
         auto ret = nvs_get_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t*>(&sets)); //reinterpret_cast<uint32_t*>(&sets)
         if (ret == ESP_OK) {
-            if (crc8_le(0, (byte*)&sets, 3) == sets.crc) { 
+            if (crc8_le(0, (byte*)&sets, 3) == sets.crc) {
 	            sets.alarm ? alarm_on(false) : alarm_off(false);
                 return;
             }
-            else { log_w("crc err. Value = 0x%02X", sets.crc); };
+            else { ESP_LOGW(TAG, "sets.crc = 0x%02X", sets.crc); };
         } else { CHECK_(ret); }
     } alarm_on(false); nvs_write_sets(nvs);
 }
@@ -508,18 +509,18 @@ String get_info(bool ver) {
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
-		str += ("\nCompiled: " __DATE__ "\t" __TIME__ "\n");
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "ESP_OTA_IMG_PENDING_VERIFY"; }
+		str += ("\nCompiled: " __TIMESTAMP__ "\n"); 
 	} log_d("%u", str.length());
 	return str;
 }
 
 void alarm_on(bool write) {
-	enableInterrupt(PIN_LINE);  timer_start_impl(); if (write) { sets.alarm = 1; nvs_write_sets(); } /*timer_restart(timer_sab); timer_start(timer_sab);*/
+	enableInterrupt(PIN_LINE);  timer_start_impl(); sets.alarm = 1; if (write) {  nvs_write_sets(); } ESP_LOGI(TAG, "ALARM_ON");
 }
 
 void alarm_off(bool write) {
-	disableInterrupt(PIN_LINE); timer_stop_impl(); if (write) { sets.alarm = 0; nvs_write_sets(); } /*timer_stop(timer_sab);*/
+	disableInterrupt(PIN_LINE); timer_stop_impl(); sets.alarm = 0; if (write) {  nvs_write_sets(); } ESP_LOGI(TAG, "ALARM_OFF");
 }
 
 void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
@@ -527,8 +528,8 @@ void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
 	if (!str.reserve(str_size)) return; //log_d("%u", str.isSSO());
 	char* ptr = str.begin(); if(!ptr) { log_d("NULL"); return; }
 	byte *field = reinterpret_cast<byte*>(&str) + (sizeof(String) -1); static_assert(sizeof(String) == 16);
-	if((*field & 0x80) == 0) reinterpret_cast<uint32_t*>(&str)[2] = str_size; //NOT SSO
-	else { *field = (str_size | 0x80); } 
+	if(*field & 0x80) { *field = (str_size | 0x80); }// SSO
+	else reinterpret_cast<uint32_t*>(&str)[2] = str_size;
 	for (byte i = 0, shift, nibble, num;;*ptr++ = ' ') {
 		for (shift = 4, num = buf[i];; shift = 0) {
 			nibble = (num >> shift) & 0xF;
@@ -545,25 +546,28 @@ bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap
 	if (hex_len < 4 || hex_len > 255) return false;
 	byte i = 0; cch* ptr = str.c_str() + sub;
 	byte* _buf = (byte*)realloc(buf, hex_len); if (_buf == NULL) return false; buf = _buf;
-	for (byte ready = 0, result = 0; *ptr; ++ptr) {
-		switch (*ptr) {
-		case '0'... '9':
-			result |= (*ptr ^ 0x30); break;
-		case 'A'... 'F':
-			result |= *ptr - 55; break;
-		case 'a' ...'f' :
-			result |= *ptr - 87; break;
-		default:
-			if (ready) goto rdy;
-			continue;
-		}
-		if (ready) {
-		rdy:buf[i] = result;
-			if (++i >= hex_len) break;
-			result = 0; ready = 0;
-		}
-		else { ready = 1; result <<= 4;};
-	}data_size = i;
+        for (byte shift = 0, result = 0;; ++ptr) {
+                switch (*ptr) {
+                case '0'... '9':
+                    result <<= shift;
+                    result |= (*ptr ^ 0x30); break;
+                case 'A'... 'F':
+                    result <<= shift;
+                    result |= *ptr - 55; break;
+                case 'a' ...'f':
+                    result <<= shift;
+                    result |= *ptr - 87; break;
+                case '\0': buf[i] = result; data_size = ++i;return true;
+                default: if(!shift) continue;
+                goto rdy;
+            }
+            if (shift) {
+rdy:            buf[i] = result;
+                if (++i >= hex_len) break;
+                result = 0; shift = 0;
+            } else { shift = 4;};
+    }//
+    data_size = i;
 	return realloc(buf, i);
 }
 
