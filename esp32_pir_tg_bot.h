@@ -8,7 +8,9 @@
 #pragma GCC diagnostic ignored "-Wunused-label"
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #define _USE_LONG_TIME_T
-//#define FIRST_BUILD 
+					//#define FIRST_BUILD
+					#define CONFIG_PROXIMA_PIR
+					#define CONFIG_GENERIC_LINE
 #define MBEDTLS_DEBUG_C
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #define CONFIG_ASYNC_TCP_USE_WDT 0
@@ -20,32 +22,41 @@
 #include "SPIFFS.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
+#include "esp_adc/adc_continuous.h"
 //#include "esp_check.h"
 //#include "mbedtls/md.h"
 //#include "time.h"
 #ifndef CONFIG_SOC_BLE_50_SUPPORTED
 //#warning "Not compatible hardware"
-#define NO_BLE
+
 #endif
+#define NO_BLE
 static_assert(sizeof(time_t) == 4);
 #include "OTAserver.h"
 #include "credentials.h"
 //#include "BLE_api.h"
-#define ESP32C3_LUATOS
+					#define ESP32C3_LUATOS
+					#define RELAY
 //#define NO_BLE
 #ifdef CONFIG_IDF_TARGET_ESP32C3
 #define PIN_BUTTON 9
-#define PIN_PWR_BUTTON 6
-#define PIN_RELAY 10
+#define PIN_PWR_BUTTON 7
+#define PIN_RELAY 5
 #define PIN_LINE 4
+#define PIN_ADC_LINE ADC_CHANNEL_1
+#define PIN_ADC_PULLUP 0
+#define SAMPLE_BUF				64
+#define ADC_TASK_FREQ			10
+#define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
+#define RELAY_STATE(x) (!x)
 #if defined ESP32C3_LUATOS
-#define PIN_PULLUP 5
+//#define PIN_PULLUP 5
 #define PIN_LED_D5 13
 #define PIN_LED 12	//D4
 #define LED_ON	HIGH
 #define LED_OFF LOW
 #else
-#define PIN_PULLUP 3
+//#define PIN_PULLUP 3
 #define PIN_LED 8
 #define LED_ON	LOW
 #define LED_OFF HIGH
@@ -66,6 +77,17 @@ static_assert(sizeof(time_t) == 4);
 #define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
 #define QUEUE_LEN 32
 
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2
+#define EXAMPLE_ADC_OUTPUT_TYPE             ADC_DIGI_OUTPUT_FORMAT_TYPE1
+#define EXAMPLE_ADC_GET_CHANNEL(p_data)     ((p_data)->type1.channel)
+#define EXAMPLE_ADC_GET_DATA(p_data)        ((p_data)->type1.data)
+#else
+#define ADC_OUTPUT_TYPE             ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#define ADC_GET_CHANNEL(p_data)     ((p_data)->type2.channel)
+#define ADC_GET_DATA(p_data)        ((p_data)->type2.data)
+#define ADC_VALUE_FRACT	(5)
+#endif
+
 #define lineRead digitalRead(PIN_LINE)
 #define dWrite(pin, val) digitalWrite(pin, val)
 #define dRead(pin) digitalRead(pin)
@@ -81,8 +103,12 @@ using fb::Message, fb::Fetcher;
 typedef enum : uint8_t {
 	ok = 0,
 	ALARM,
-	LINE_HIGH,
+	DOOR_CLOSE,
+	DOOR_OPEN,
 	LINE_LOW,
+	LINE_HIGH,
+	RELAY_0,
+	RELAY_1,
 	RESEND_MSG,
 	CHECK_MSG,
 	WIFI_DISCONNECT,
@@ -94,21 +120,29 @@ typedef enum : uint8_t {
 
 typedef struct { stat_t status; byte counter; uint16_t delta; } tgMsg_t;
 
-typedef struct { /* unsigned */bool alarm , res , dummy/* : 22 */; byte crc; } sets_t;
+typedef struct { byte alarm, proxima, adc_line, relay;} sets_t;
 static_assert(sizeof(sets_t) == 4);
 typedef struct { String ssid,pass; } auth_t;
 
-StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
-StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
-TaskHandle_t loopTaskHandle, sendTaskHandle;
+StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE], xAdcReadStack[4096];
+StaticTask_t xMainTaskBuffer, xSendTaskBuffer, xAdcReadBuffer;
+TaskHandle_t loopTaskHandle, sendTaskHandle, adcReadTaskHandle;
 
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticQueue_t xStaticQueue;
 QueueHandle_t QueueMsgHandle;
 
+__unused adc_continuous_handle_t adc_handle = NULL;
+__unused uint8_t adc_buf[BUF_ADC_SIZE];
+//uint16_t gerkon_open_low;
+uint16_t gerkon_open_high;
+uint16_t gerkon_close_high;
+uint16_t gerkon_close_low;
+uint16_t adc_button_low;
+
 //StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
 esp_timer_handle_t timer_intr, timer_pwr;
-gptimer_handle_t timer_sab;
+gptimer_handle_t timer_sab = NULL;
 
 volatile stat_t Flag = ok;
 __attribute__((unused)) stat_t last_state = ok;
@@ -120,22 +154,25 @@ network_event_handle_t event_id;
 nvs_handle_t nvsHandle = 0;
 sets_t sets;
 auth_t* Auth = nullptr;
-byte* ble_data = nullptr;
-byte ble_data_size = 0;
-String pin_pass;
+byte* ble_data = nullptr, ble_data_size = 0;
+//String pin_pass;
 esp_err_t update_error = ESP_OK;
 FastBot2 bot(BOT_TOKEN);
 FastBot2 botSend(BOT_TOKEN);
 #ifdef FIRST_BUILD
 #pragma message "FIRST_BUILD"
-AsyncWebServer server(80);
 #endif
+AsyncWebServer server(80);
 
 void mainTask(void*);
 void sendTask(void*);
 void sabotageCallback(TimerHandle_t);
+static void adcReadTask(void*);
 static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_timer(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
+static bool IRAM_ATTR conv_done_cb(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *);
+adc_continuous_handle_t continuous_adc_init(adc_continuous_callback_t cb, const adc_channel_t *channel, uint8_t channel_num, uint16_t buf_size);
+
 void read_credentials();
 void time_sync(byte wait_sec = 10);
 bool readFile(cch* path, String& Content);
@@ -163,8 +200,10 @@ String create_hex_string(cbyte* buf, cbyte data_size) {
 };
 uint32_t generate_pin(const char *str, byte name_len, String& pass);
 
+
 void nvs_read_sets();
 void nvs_write_sets(nvsApi nvs = nvsApi(NVS_WIFI_SPACE, NVS_READWRITE));
+void init_sets();
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
 void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskNotify(loopTaskHandle,0,eNoAction); };
@@ -205,6 +244,7 @@ inline void led_blink() {
 	dWrite(PIN_LED_D5, state = !state);
 #endif
 }
+
 
 //bool verifyRollbackLater() { return true; };
 
@@ -339,4 +379,27 @@ void sabotageCallback(TimerHandle_t xTimer) {
 	last_state = tmp.status = (lineRead ? LINE_HIGH : LINE_LOW);
 	tmp.delta = (uint16_t)((delta /= 1000) > __UINT16_MAX__ ? __UINT16_MAX__ : delta); log_d("%u", delta);
 	xQueueSend(QueueMsgHandle, &tmp, 0);
+}
+
+uint32_t generate_pin(const char *str, byte name_len, String &pass) {
+    //const byte name_len = strlen(str); 
+	if(!str || !pass.c_str() ) return 0;
+	const byte pass_len = pass.length();
+    byte shaResult[32];
+    byte payload[name_len + pass_len];
+    mbedtls_md_context_t ctx {};
+    memcpy(payload, str, name_len);
+    memcpy(&payload[name_len], pass.c_str(), pass_len);
+    DEBUGLN((char*)payload);DEBUGF("name_len = %u; ""payloadLen = %u\n", name_len, pass_len);
+    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+    mbedtls_md_starts(&ctx);
+    mbedtls_md_update(&ctx, payload,  name_len + pass_len);
+    mbedtls_md_finish(&ctx, shaResult);
+    mbedtls_md_free(&ctx);
+    DEBUG("Hash: "); for (byte i = 0; i < sizeof(shaResult); i++) { DEBUGF("%02x", shaResult[i]);} DEBUGLN();
+    uint32_t crcResult = crc32_le(0, shaResult, sizeof(shaResult));
+    DEBUGF("crcResult = %lu\n", crcResult);
+    crcResult = 1000 + crcResult % 999000;
+    DEBUGF("pin = %lu\n", crcResult);// return 100000 + esp_random() % 900000,
+    return crcResult;
 }
