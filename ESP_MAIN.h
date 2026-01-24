@@ -62,14 +62,16 @@ inline USBCDC USBSerial(0)
 //do {esp_err_t ret = (x); if (unlikely(ret != ESP_OK)) {return;} }while(0)
 #endif // DEBUG_ENABLE
 #define CHECK_(x) ESP_ERROR_CHECK_WITHOUT_ABORT(x)
-#define CHECK_RET(x) ESP_RETURN_ON_ERROR(x, "","")
+#define CHECK_RET(x) ESP_RETURN_ON_ERROR(x,"","")
 #define CHECK_VOID(x) ESP_RETURN_VOID_ON_ERROR(x,"","")
 #define uS esp_timer_get_time()
 #define delayUntil(prev, tmr) vTaskDelayUntil((prev),pdMS_TO_TICKS(tmr))
-#define SEC (1000000ul)
+#define SEC (1000000ULL)
 #define ENTER_CRITICAL() portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;portENTER_CRITICAL(&mux);
 #define EXIT_CRITICAL() portEXIT_CRITICAL(&mux);
 typedef const char cch; typedef const uint8_t cbyte; typedef uint16_t u16; typedef uint32_t u32; typedef uint64_t u64;
+
+
 
 #ifdef CONFIG_APP_ROLLBACK_ENABLE
 inline esp_ota_img_states_t img_state(bool valid = false) {
@@ -132,9 +134,9 @@ inline void main_init() {
 	//	__unused esp_err_t ret = esp_bt_controller_mem_release(BT_MODE_BTDM); log_d("%i", ret);
 	//}
 #endif
-#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+/* #ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
 	if (!verifyRollbackLater()) { log_i("app_valid"); esp_ota_mark_app_valid_cancel_rollback(); }
-#endif
+#endif */
 }
 
 class nvsApi {
@@ -147,7 +149,7 @@ public:
 	nvsApi(nvsApi &&obj) : _handle(obj._handle) { obj._handle = 0; ESP_LOGD("NVS", "ctor move"); };
 	nvsApi(const char* space, nvs_open_mode_t mode) { begin(space, mode); };
 	esp_err_t begin(const char* space, nvs_open_mode_t mode) {
-		if(_handle) return 0xDADADA;
+		//if(_handle) return 0xDADADA;
 		esp_err_t ret = nvs_open(space, mode, &_handle);
 		ESP_ERROR_CHECK_WITHOUT_ABORT(ret);
 		return ret;
@@ -218,26 +220,26 @@ inline uint64_t timer_read(gptimer_handle_t handle) {
 	return value;
 }
 
-void ARDUINO_ISR_ATTR pinMode(uint8_t pin, uint8_t mode) {
+void pinMode(uint8_t pin, uint8_t mode) {
 	if (mode >= 32) { log_w("%u, %u", pin, mode); return; }
 	gpio_config_t conf = {
-		.pin_bit_mask = (1ULL << pin),						/*!< GPIO pin: set with bit mask, each bit maps to a GPIO */
-		.mode = (gpio_mode_t)(mode & GPIO_MODE_INPUT_OUTPUT_OD),	/*!<  GPIO mode: set input/output mode                     */
-		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,				/*!< GPIO pull-up                                         */
-		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,			/*!< GPIO pull-down                                       */
-		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type, /*!< GPIO interrupt type - previously set                 */
+		.pin_bit_mask = (1ULL << pin),
+		.mode = (gpio_mode_t)(mode & GPIO_MODE_INPUT_OUTPUT_OD),
+		.pull_up_en = mode & PULLUP ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,		
+		.pull_down_en = mode & PULLDOWN ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,		
+		.intr_type = (gpio_int_type_t)GPIO_LL_GET_HW(GPIO_PORT_0)->pin[pin].int_type,
 	};
 	if (gpio_config(&conf) != ESP_OK) log_e("IO %i config failed", pin);
 }
  
 /*  __attribute__((__always_inline__)) inline */ void digitalWrite(uint8_t pin, uint8_t val) {
     if (!digitalPinCanOutput(pin)) return;
-    gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
+    const gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
 	gpio_hal_set_level(&gpiohal, pin, val);
 }
 
 int digitalRead(uint8_t pin) {
-	gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; //return gpio_ll_get_level(&GPIO, (gpio_num_t)pin);
+	const gpio_hal_context_t gpiohal { .dev = GPIO_LL_GET_HW(GPIO_PORT_0) }; 
 	return gpio_hal_get_level(&gpiohal, (gpio_num_t)pin);
 }
 
@@ -267,5 +269,11 @@ void detachInterrupt(uint8_t pin) {
 void enableInterrupt(uint8_t pin) { gpio_intr_enable((gpio_num_t)pin); }
 
 void disableInterrupt(uint8_t pin) { gpio_intr_disable((gpio_num_t)pin); }
+
+uint16_t analogRead(uint8_t pin) ;
+uint32_t analogReadMilliVolts(uint8_t pin) ;
+void analogReadResolution(uint8_t bits) ;
+void analogSetAttenuation(adc_attenuation_t attenuation) ;
+void analogSetPinAttenuation(uint8_t pin, adc_attenuation_t attenuation);
 
 
