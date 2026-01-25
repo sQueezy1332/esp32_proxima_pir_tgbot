@@ -49,6 +49,7 @@ static_assert(sizeof(time_t) == 4);
 #define ADC_TASK_FREQ			10
 #define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
 #define RELAY_STATE(x) (!x)
+#define DEF_SWITCH_DELAY (900)
 #if defined ESP32C3_LUATOS
 //#define PIN_PULLUP 5
 #define PIN_LED_D5 13
@@ -85,7 +86,7 @@ static_assert(sizeof(time_t) == 4);
 #define ADC_OUTPUT_TYPE             ADC_DIGI_OUTPUT_FORMAT_TYPE2
 #define ADC_GET_CHANNEL(p_data)     ((p_data)->type2.channel)
 #define ADC_GET_DATA(p_data)        ((p_data)->type2.data)
-#define ADC_VALUE_FRACT	(5)
+#define ADC_VALUE_FRACT	(4)
 #endif
 
 #define lineRead digitalRead(PIN_LINE)
@@ -135,6 +136,9 @@ QueueHandle_t QueueMsgHandle;
 __unused adc_continuous_handle_t adc_handle = NULL;
 __unused uint8_t adc_buf[BUF_ADC_SIZE];
 //uint16_t gerkon_open_low;
+	uint8_t gerkon_open_default = 35;
+	uint8_t gerkon_close_default = 30;
+	uint8_t gerkon_button_default = 20;
 uint16_t gerkon_open_high;
 uint16_t gerkon_close_high;
 uint16_t gerkon_close_low;
@@ -213,6 +217,15 @@ bool auth_handler(AsyncWebServerRequest*& request) {
 			return false;
 	}
 	return true;
+}
+
+void init_adc_values() { 
+	gerkon_open_high = (gerkon_open_default * 100)/ 100.f * (100+ADC_VALUE_FRACT);
+	gerkon_close_high = (gerkon_close_default * 100) / 100.f * (100+ADC_VALUE_FRACT);
+	gerkon_close_low = (gerkon_close_default * 100) / 100.f * (100-ADC_VALUE_FRACT);
+	adc_button_low = (gerkon_button_default * 100) / 100.f * (100-(ADC_VALUE_FRACT *2));
+	ESP_LOGI(TAG, "open_high %u, close_high %u, close_low %u, adc_button_low %u", 
+		gerkon_open_high, gerkon_close_high, gerkon_close_low, adc_button_low);
 }
 
 void ota_progress(size_t progress, size_t size) {
