@@ -10,14 +10,13 @@ extern "C" void app_main() {
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 #ifdef CONFIG_GENERIC_LINE
 	adcReadTaskHandle = xTaskCreateStatic(adcReadTask, "adc", sizeof(xAdcReadStack), NULL, 2, xAdcReadStack, &xAdcReadBuffer);
-	gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
-    gpio_config(&conf);
 #endif
 	nvs_read_sets();
+	read_credentials();
+	init_adc_values();
 	init_sets();
 	sets.alarm ? alarm_on(false) : alarm_off(false);
 	SPIFFS.begin();
-	read_credentials();
 #ifndef FIRST_BUILD
 	assert(timer_pwr = esp_timer_init([](void* ) { dWrite(PIN_PWR_BUTTON, 1); } )); 
 	pinMode(PIN_LED_D5, PULLUP | OUTPUT); pinMode(PIN_BUTTON, INPUT);//pinMode(PIN_RELAY, OUTPUT);
@@ -75,14 +74,16 @@ void sendTask(void*) {
 			if (wifi_sta_init()) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
-				case DOOR_CLOSE:  msg.text = "DOOR_CLOSE";  break;
-				case DOOR_OPEN:  msg.text = "DOOR_OPEN";  break;
+				case DOOR_CLOSE: msg.text = "DOOR_CLOSE";  break;
+				case DOOR_OPEN: msg.text = "DOOR_OPEN";  break;
 				case LINE_LOW:  msg.text = "LINE_LOW";  break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
+				case RELAY_0: msg.text = "RELAY_OFF"; break;
+				case RELAY_1: msg.text = "RELAY_ON"; break;
 				case ok: msg.text = "OK";
 					if(event.counter) { CHECK_(timer_alarm(timer_sab, TIMER_SABOTAGE)); }
 					//goto _OK;
-				default: break;
+				default: msg.text = "0x"; msg.text += String(event.status, HEX); break;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
 				//_OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
@@ -107,38 +108,49 @@ save:		if (event.status != ok) { log_i("save");
 }
 
 void adcReadTask(void*) { 
-	adc_digi_output_data_t *p; tgMsg_t out {};
-	for(uint32_t val, ret_num;;) {
+	const adc_digi_output_data_t *p; tgMsg_t out {};
+	for(uint32_t ret_num, val, i, last_sw = 0;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //TickType_t now =  xTaskGetTickCount(); ESP_LOGD("TIME", "%lu", pdTICKS_TO_MS(now - last)); last = now;
             esp_err_t ret = adc_continuous_read(adc_handle, adc_buf, BUF_ADC_SIZE, &ret_num, 0);
             if (ret == ESP_OK)  {
                 //ESP_LOGW("TASK", "ret = %x, ret_num = %"PRIu32" bytes", ret, ret_num);
                 ret_num /= SOC_ADC_DIGI_RESULT_BYTES;
-                for (int i = 0, val = 0; i < ret_num; i++) { 
+                for (i = 0, val = 0; i < ret_num; i++) { 
                     p = &reinterpret_cast<decltype(p)>(adc_buf)[i];// __unused uint32_t chan_num = EXAMPLE_ADC_GET_CHANNEL(p);
                     val += ADC_GET_DATA(p);
                 }
                 val /= SAMPLE_BUF;
-				{
-				if(val > gerkon_open_high) { if(out.status == LINE_HIGH) { continue; } out.status = LINE_HIGH; }
+				uint32_t volt = val * 3300 / 4095; 
+				ESP_LOGD("adc", "Voltage: %lu\tValue: %lu", volt, val);
+			if(1) {
+				if(val > gerkon_open_high) { 
+					if(out.status == LINE_HIGH) continue; 
+					out.status = LINE_HIGH;
+				}
 				else if(val > gerkon_close_high) { 
-					if(!sets.alarm || out.status == DOOR_OPEN) { continue; } out.status = DOOR_OPEN; }
+					if(!sets.alarm || out.status == DOOR_OPEN) continue; 
+					out.status = DOOR_OPEN; 
+				} //3500 raw //2420v  
 				else if(val > gerkon_close_low ) { 
-					if(!sets.alarm || out.status == DOOR_CLOSE) { continue; } out.status = DOOR_CLOSE; }
-				else if(val > adc_button_low) {
+					if(!sets.alarm || out.status == DOOR_CLOSE) continue;  
+					out.status = DOOR_CLOSE; 
+				} //3000 raw //2075v  
+				else if(val > adc_button_low) { //TODO
 					//if(++out.counter == ADC_TASK_FREQ);
+					TickType_t now = xTaskGetTickCount();
+					if(now - last_sw > pdMS_TO_TICKS(DEF_SWITCH_DELAY)) {
+					last_sw = now;
 					const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
 					dWrite(PIN_RELAY, new_state);
+					if(!sets.alarm) continue;
 					out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0;
+					};
 				}
-				else if(out.status == LINE_LOW) { continue; } out.status = LINE_LOW; //val < adc_button_low
-				}
-				uint32_t volt = val * 3300 / 4095; 
-				ESP_LOGI("adc", "Voltage: %lu\tValue: %lu", volt, val);
-				out.counter = 0;
-				out.delta = val;
+				else { if(out.status == LINE_LOW) continue; out.status = LINE_LOW; } //val < adc_button_low
+				out.delta = val; out.counter = 0;
 				xQueueSend(QueueMsgHandle, &out, 0);
+			}	
             }
             else if (ret == ESP_ERR_TIMEOUT) { /* ESP_LOGW("ERR", "TIMEOUT"); */ }
             else { ESP_LOGE("ERR", "err = 0x%02X", ret); }
@@ -463,8 +475,10 @@ void handleMessage(fb::Update& u) {
 		else*/ { msg.text = "Unknown"; }
 	}
 #else 
-	default:  if(u.message().text().startsWith("/mode_")) {
-		cch* data = u.message().text()._str + sizeof("/mode_")-1;
+	default: 
+	cch* data = u.message().text()._str;
+	if(!strncmp(data,"/mode_", sizeof("/mode_")-1)) {
+		data += sizeof("/mode_")-1;
 		ESP_LOGI(TAG, data);
 		byte proxima = 0xFF, adc = 0xFF;
 		if(data[0] == '1') { proxima = 1;}
@@ -473,13 +487,27 @@ void handleMessage(fb::Update& u) {
 		else if(data[1] == '0') { adc = 0; } 
 		if(proxima == 0xFF || adc == 0xFF) {
 			 msg.text = "WRONG INPUT\n"; break;
-		} else  {
+		} else {
 			msg.text = "Proxima "; msg.text += proxima ? "ON": "OFF";
 			msg.text += "\nADC_Line "; msg.text += adc ? "ON": "OFF";
 			sets.proxima = proxima, sets.adc_line = adc;
 			init_sets();
 		};
-	} else { msg.text = "Unknown";} 
+	} 
+#ifdef CONFIG_GENERIC_LINE
+	else if(!strncmp(data = u.message().text()._str,"/gerkon_", sizeof("/gerkon_")-1)) {
+		data += sizeof("/gerkon_")-1;
+		if(!strncmp(data, "open_", sizeof("open_")-1)) {
+			//msg.text = "gerkon_open_default";
+		}
+		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
+			//msg.text = "gerkon_close_default";
+		}else if(!strncmp(data, "button_", sizeof("button_")-1)) {
+			//msg.text = "gerkon_button_default";
+		} else goto unknown;
+	}
+#endif
+	else { unknown: msg.text = "Unknown";} 
 	}
 #endif
 	DEBUGLN(msg.text);
@@ -616,6 +644,8 @@ void init_sets() {
 		adc_channel_t channel[] = { PIN_ADC_LINE }; int size = sizeof(channel)/sizeof(adc_channel_t);
 		assert(adc_handle = continuous_adc_init(conv_done_cb, channel, size, BUF_ADC_SIZE)); 
 		//ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
+		gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
+	    gpio_config(&conf);
 		vTaskResume(adcReadTaskHandle);
 	}
 	else if (!sets.adc_line && adc_handle) {
