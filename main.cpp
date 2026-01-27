@@ -82,7 +82,7 @@ void sendTask(void*) {
 				case RELAY_1: msg.text = "RELAY_ON"; break;
 				case ok: msg.text = "OK";
 					if(event.counter) { CHECK_(timer_alarm(timer_sab, TIMER_SABOTAGE)); }
-					//goto _OK;
+					break; //goto _OK;
 				default: msg.text = "0x"; msg.text += String(event.status, HEX); break;
 				}
 				msg.text.concat('\t'); msg.text.concat(event.delta);
@@ -782,4 +782,5 @@ adc_continuous_handle_t continuous_adc_init(adc_continuous_callback_t cb, const 
     ESP_ERROR_CHECK(adc_continuous_start(handle));
     return handle;
 }
+
 
