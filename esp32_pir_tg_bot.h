@@ -50,6 +50,7 @@ static_assert(sizeof(time_t) == 4);
 #define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
 #define RELAY_STATE(x) (!x)
 #define DEF_SWITCH_DELAY (900)
+#define ADC_VALUE_FRACT	(5)
 #if defined ESP32C3_LUATOS
 //#define PIN_PULLUP 5
 #define PIN_LED_D5 13
@@ -86,7 +87,6 @@ static_assert(sizeof(time_t) == 4);
 #define ADC_OUTPUT_TYPE             ADC_DIGI_OUTPUT_FORMAT_TYPE2
 #define ADC_GET_CHANNEL(p_data)     ((p_data)->type2.channel)
 #define ADC_GET_DATA(p_data)        ((p_data)->type2.data)
-#define ADC_VALUE_FRACT	(4)
 #endif
 
 #define lineRead digitalRead(PIN_LINE)
@@ -135,7 +135,7 @@ QueueHandle_t QueueMsgHandle;
 
 __unused adc_continuous_handle_t adc_handle = NULL;
 __unused uint8_t adc_buf[BUF_ADC_SIZE];
-//uint16_t gerkon_open_low;
+//uint8_t gerkon_open_low;
 	uint8_t gerkon_open_default = 35;
 	uint8_t gerkon_close_default = 30;
 	uint8_t gerkon_button_default = 20;
@@ -208,6 +208,7 @@ uint32_t generate_pin(const char *str, byte name_len, String& pass);
 void nvs_read_sets();
 void nvs_write_sets(nvsApi nvs = nvsApi(NVS_WIFI_SPACE, NVS_READWRITE));
 void init_sets();
+bool update_adc_sets(cch* data,  String & text);
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
 void resumeTask(stat_t st = CHECK_MSG) { Flag = st; xTaskNotify(loopTaskHandle,0,eNoAction); };
