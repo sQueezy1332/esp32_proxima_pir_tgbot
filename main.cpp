@@ -74,8 +74,8 @@ void sendTask(void*) {
 			if (wifi_sta_init()) {
 				switch (event.status) {
 				case ALARM: msg.text = "ALARM"; break;
-				case DOOR_CLOSE: msg.text = "DOOR_CLOSE";  break;
-				case DOOR_OPEN: msg.text = "DOOR_OPEN";  break;
+				case GERKON_CLOSE: msg.text = "GERKON_CLOSE";  break;
+				case GERKON_OPEN: msg.text = "GERKON_OPEN";  break;
 				case LINE_LOW:  msg.text = "LINE_LOW";  break;
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case RELAY_0: msg.text = "RELAY_OFF"; break;
@@ -129,26 +129,25 @@ void adcReadTask(void*) {
 					out.status = LINE_HIGH;
 				}
 				else if(val > gerkon_close_high) { 
-					if(!sets.alarm || out.status == DOOR_OPEN) continue; 
-					out.status = DOOR_OPEN; 
+					if(!sets.alarm || out.status == GERKON_OPEN) continue; 
+					out.status = GERKON_OPEN; 
 				} 
 				else if(val > gerkon_close_low ) { 
-					if(!sets.alarm || out.status == DOOR_CLOSE) continue;  
-					out.status = DOOR_CLOSE; 
+					if(!sets.alarm || out.status == GERKON_CLOSE) continue;  
+					out.status = GERKON_CLOSE; 
 				} 
 				else if(val > adc_button_low) { //TODO
 					//if(++out.counter == ADC_TASK_FREQ);
 					TickType_t now = xTaskGetTickCount();
 					if(now - last_sw > pdMS_TO_TICKS(DEF_SWITCH_DELAY)) {
-						last_sw = now;
 						const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
 						dWrite(PIN_RELAY, new_state);
 						if(!sets.alarm) continue;
-						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0;
+						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0; last_sw = now;
 					}else continue;
 				}
 				else { if(out.status == LINE_LOW) continue; out.status = LINE_LOW; } //val < adc_button_low
-				out.delta = val; out.counter = 0;
+				out.delta = val; //out.counter = 0;
 				xQueueSend(QueueMsgHandle, &out, 0);
 			}	
             }
@@ -476,8 +475,7 @@ void handleMessage(fb::Update& u) {
 	}
 #else 
 	default: {
-		if(!update_adc_sets(u.message().text()._str, msg.text)) goto unknown;
-		else { unknown: msg.text = "Unknown";} 
+		if(!update_adc_sets(u.message().text()._str, msg.text)) msg.text = "Unknown";
 		}
 	}
 #endif
@@ -622,7 +620,7 @@ void get_task_list(String& str) {
 
 String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
-	String str; str.reserve(300);
+	String str; str.reserve(350);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
@@ -631,13 +629,16 @@ String get_info(bool ver) {
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
+	str += "\ngerkon_open_default = "; str += gerkon_open_default;
+	str += "\ngerkon_close_default = "; str += gerkon_close_default;
+	str += "\ngerkon_button_default = ";  str += gerkon_button_default;
 	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "ESP_OTA_IMG_PENDING_VERIFY"; }
 		str += ("\nCompiled: " __TIMESTAMP__ "\n");
-	} log_d("%u", str.length());
+	} ESP_LOGI("get_info","%u", str.length());
 	return str;
 }
 
@@ -782,5 +783,4 @@ adc_continuous_handle_t continuous_adc_init(adc_continuous_callback_t cb, const 
     ESP_ERROR_CHECK(adc_continuous_start(handle));
     return handle;
 }
-
 
