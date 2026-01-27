@@ -629,6 +629,7 @@ String get_info(bool ver) {
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
+	str += "\nMode_";  str += sets.proxima; str += sets.adc_line;
 	str += "\ngerkon_open_default = "; str += gerkon_open_default;
 	str += "\ngerkon_close_default = "; str += gerkon_close_default;
 	str += "\ngerkon_button_default = ";  str += gerkon_button_default;
