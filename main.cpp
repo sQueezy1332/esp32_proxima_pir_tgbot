@@ -131,21 +131,21 @@ void adcReadTask(void*) {
 				else if(val > gerkon_close_high) { 
 					if(!sets.alarm || out.status == DOOR_OPEN) continue; 
 					out.status = DOOR_OPEN; 
-				} //3500 raw //2420v  
+				} 
 				else if(val > gerkon_close_low ) { 
 					if(!sets.alarm || out.status == DOOR_CLOSE) continue;  
 					out.status = DOOR_CLOSE; 
-				} //3000 raw //2075v  
+				} 
 				else if(val > adc_button_low) { //TODO
 					//if(++out.counter == ADC_TASK_FREQ);
 					TickType_t now = xTaskGetTickCount();
 					if(now - last_sw > pdMS_TO_TICKS(DEF_SWITCH_DELAY)) {
-					last_sw = now;
-					const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
-					dWrite(PIN_RELAY, new_state);
-					if(!sets.alarm) continue;
-					out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0;
-					};
+						last_sw = now;
+						const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
+						dWrite(PIN_RELAY, new_state);
+						if(!sets.alarm) continue;
+						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0;
+					}else continue;
 				}
 				else { if(out.status == LINE_LOW) continue; out.status = LINE_LOW; } //val < adc_button_low
 				out.delta = val; out.counter = 0;
@@ -153,7 +153,7 @@ void adcReadTask(void*) {
 			}	
             }
             else if (ret == ESP_ERR_TIMEOUT) { /* ESP_LOGW("ERR", "TIMEOUT"); */ }
-            else { ESP_LOGE("ERR", "err = 0x%02X", ret); }
+            else { ESP_LOGW("ERR", "err = 0x%02X", ret); }
 	
     } //ESP_ERROR_CHECK(adc_continuous_stop(adc_handle)); ESP_ERROR_CHECK(adc_continuous_deinit(adc_handle));
 }
@@ -226,7 +226,7 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 	}ptr = str.begin();
 	for (offset = 0; offset < str_len && file.available();) {
 		file.read((byte*)&timestamp, sizeof(time_t)); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
-		timeinfo = localtime(&timestamp);  //localtime_r() do same
+		/* timeinfo = localtime(&timestamp);  //localtime_r() do same
 		strftime(&ptr[offset], 9, "%H:%M:%S", timeinfo);
 		offset += 8;
 		if (timeinfo->tm_yday != tm_yday_last) {
@@ -235,10 +235,10 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 			tm_yday_last = timeinfo->tm_yday;
 		}
 		ptr[offset++] = '\n'; //free(timeinfo);
-		//str += (uint32_t)timestamp; str += "\n";
+		 */str += (uint32_t)timestamp; str += "\n";
 	}DEBUGLN(); //log_d("%u", ESP.getFreeHeap());
-	ptr[offset - 1] = '\0';
-	reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
+	//ptr[offset - 1] = '\0';
+	//reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
 try_send: DEBUGLN(str);
 	if (wifi_sta_init()) {
 		if (_bot.sendMessage(msg)) {
@@ -475,39 +475,10 @@ void handleMessage(fb::Update& u) {
 		else*/ { msg.text = "Unknown"; }
 	}
 #else 
-	default: 
-	cch* data = u.message().text()._str;
-	if(!strncmp(data,"/mode_", sizeof("/mode_")-1)) {
-		data += sizeof("/mode_")-1;
-		ESP_LOGI(TAG, data);
-		byte proxima = 0xFF, adc = 0xFF;
-		if(data[0] == '1') { proxima = 1;}
-		else if(data[0] == '0') { proxima = 0; } 
-		if(data[1] == '1') { adc = 1; }
-		else if(data[1] == '0') { adc = 0; } 
-		if(proxima == 0xFF || adc == 0xFF) {
-			 msg.text = "WRONG INPUT\n"; break;
-		} else {
-			msg.text = "Proxima "; msg.text += proxima ? "ON": "OFF";
-			msg.text += "\nADC_Line "; msg.text += adc ? "ON": "OFF";
-			sets.proxima = proxima, sets.adc_line = adc;
-			init_sets();
-		};
-	} 
-#ifdef CONFIG_GENERIC_LINE
-	else if(!strncmp(data = u.message().text()._str,"/gerkon_", sizeof("/gerkon_")-1)) {
-		data += sizeof("/gerkon_")-1;
-		if(!strncmp(data, "open_", sizeof("open_")-1)) {
-			//msg.text = "gerkon_open_default";
+	default: {
+		if(!update_adc_sets(u.message().text()._str, msg.text)) goto unknown;
+		else { unknown: msg.text = "Unknown";} 
 		}
-		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
-			//msg.text = "gerkon_close_default";
-		}else if(!strncmp(data, "button_", sizeof("button_")-1)) {
-			//msg.text = "gerkon_button_default";
-		} else goto unknown;
-	}
-#endif
-	else { unknown: msg.text = "Unknown";} 
 	}
 #endif
 	DEBUGLN(msg.text);
@@ -520,6 +491,52 @@ void handleDocument(fb::Update& u) {
 	case SH("/filesystem"): otaBegin(u, &Fetcher::updateFS); break;
 	default: bot.sendMessage(Message("Unknown", u.message().chat().id()));
 	}
+}
+
+bool update_adc_sets(cch* data,  String& text) {
+	if(!strncmp(data,"/mode_", sizeof("/mode_")-1)) {
+		data += sizeof("/mode_")-1;
+		byte proxima = 0xFF, adc = 0xFF;
+		if(data[0] == '1') { proxima = 1;}
+		else if(data[0] == '0') { proxima = 0; } 
+		if(data[1] == '1') { adc = 1; }
+		else if(data[1] == '0') { adc = 0; } 
+		if(proxima == 0xFF || adc == 0xFF) {
+			goto error;
+		} else {
+			text = "Proxima "; text += proxima ? "ON": "OFF";
+			text += "\nADC_Line "; text += adc ? "ON": "OFF";
+			sets.proxima = proxima, sets.adc_line = adc;
+			init_sets(); //return true;
+		};
+	} 
+	else if(!strncmp(data,"/gerkon_", sizeof("/gerkon_")-1)) {
+		unsigned res; data += sizeof("/gerkon_")-1;
+		if(!strncmp(data, "open_", sizeof("open_")-1)) {
+			data += sizeof("open_")-1;
+			if((res = atoi(data) > 0)) {
+				gerkon_open_default = res;
+				text = "gerkon_open_default = "; text += res;
+			} else goto error;
+		}
+		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
+			data += sizeof("close_")-1;
+			if((res = atoi(data) > 0)) {
+				gerkon_close_default = res;
+				text = "gerkon_close_default = "; text += res;
+			} else goto error;
+		} else if(!strncmp(data, "button_", sizeof("button_")-1)) {
+			data += sizeof("button_")-1;
+			if((res = atoi(data) > 0)) {
+				gerkon_button_default = res;
+				text = "gerkon_button_default = "; 
+			} else goto error;
+		} else return false;
+		text += res;
+		init_adc_values();
+	}
+	return true;
+error: text = "WRONG INPUT"; return true;
 }
 
 void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
