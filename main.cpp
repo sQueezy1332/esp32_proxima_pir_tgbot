@@ -31,7 +31,7 @@ extern "C" void app_main() {
 	wifi_server_init();
 	if (!wifi_sta_init()) { /*WiFi.begin(DEFAULT_SSID, DEFAULT_PASS);*/ /* if (!wifi_sta_init()) wifi_ap_init(); */ };
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); 
-	time_sync();//setenv("TZ", "MSK-3", 1); tzset();
+	//sntp_set_time_sync_notification_cb(); //time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot.attachUpdate(updateHandler);
 	bot.skipUpdates(-2);
 	bot.setPollMode(fb::Poll::Long, 30000);
@@ -53,7 +53,11 @@ void mainTask(void*) {
 			{ AutoLed <PIN_LED_D5> led;
 			if (wifi_sta_init()) { delay(10); bot.tick(); } } 
 			delay(FB_LONG_POLL_TOUT);	continue;
-		case WIFI_DISCONNECT: time_sync(); WiFi.disconnect();
+		case WIFI_DISCONNECT: {
+			//if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(5000)) != ESP_OK) {ESP_LOGI(TAG, "Update system time timeout");}
+			time_t now = time(NULL); ESP_LOGI(TAG, "%lu", now);
+			WiFi.disconnect();
+			}
 			ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(60 * 60 * 1000));
 		case WIFI_RECON: 
 			if (wifi_sta_init()) { bot.tickManual(); } continue;
@@ -100,7 +104,7 @@ void sendTask(void*) {
 			}
 			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected);
 save:		if (event.status != ok) { log_i("save");
-				appendFile(ALARM_PATH, timestamp_unix + ((uS - time_sync_unix) / 1000000));
+				appendFile(ALARM_PATH, time(NULL));
 				if(Flag != RESEND_MSG) resumeTask(RESEND_MSG); 
 			}
 		}//vTaskGetInfo();
@@ -109,7 +113,8 @@ save:		if (event.status != ok) { log_i("save");
 
 void adcReadTask(void*) { 
 	const adc_digi_output_data_t *p; tgMsg_t out {};
-	for(uint32_t ret_num, val, i, last_sw = 0;;) {
+	uint32_t ret_num, val, i, last_sw = 0; curr_adc_ptr = &val;
+	for(;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //TickType_t now =  xTaskGetTickCount(); ESP_LOGD("TIME", "%lu", pdTICKS_TO_MS(now - last)); last = now;
             esp_err_t ret = adc_continuous_read(adc_handle, adc_buf, BUF_ADC_SIZE, &ret_num, 0);
@@ -122,7 +127,7 @@ void adcReadTask(void*) {
                 }
                 val /= SAMPLE_BUF;
 				uint32_t volt = val * 3300 / 4095; 
-				ESP_LOGD("adc", "Voltage: %lu\tValue: %lu", volt, val);
+				ESP_LOGD("adc", "Voltage: %u\tValue: %u", volt, val);
 			if(1) {
 				if(val > gerkon_open_high) { 
 					if(out.status == LINE_HIGH) continue; 
@@ -163,7 +168,7 @@ bool conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_
     return false;
 }
 
-void time_sync(byte wait_sec) {
+/* void time_sync(byte wait_sec) {
 	DEBUG("Time sync "); if (!WiFi.isConnected()) return;
 	time_t temp = 0;
 	for (;; --wait_sec) {
@@ -177,7 +182,7 @@ void time_sync(byte wait_sec) {
 	time_sync_unix = uS; DEBUGLN(" success");
 	timestamp_unix = temp;
 	log_i("%u , timer %u", temp, wait_sec);
-}
+} */
 /*		INTERRUPTS		*/
 static void isr_handler(/*void**/) {
 	if (lineRead) return;
@@ -217,28 +222,29 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 		return true;
 	}
 	const uint32_t file_size = file.size(), count = file_size / sizeof(time_t), str_len = 18 * count, heap = ESP.getFreeHeap();
-	__unused char* ptr; size_t offset; time_t timestamp = 0; tm * timeinfo; int tm_yday_last = 0;
+	__unused char* ptr; size_t offset; time_t timestamp = 0; __unused int tm_yday_last = 0;
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
 		str += "file_size \n"; str += file_size; str += "count \n";
 		str += count; str += "str_len \n"; str += str_len; str += "HEAP \n"; str += heap;
 		goto try_send;
-	}ptr = str.begin();
+	} ptr = str.begin();
+	static const char fmt1[] = "%H:%M:%S", fmt2[] = " %d.%m.%y";
 	for (offset = 0; offset < str_len && file.available();) {
 		file.read((byte*)&timestamp, sizeof(time_t)); DEBUG(timestamp); DEBUG(' ');//"%H:%M:%S %d.%m.%y"
-		/* timeinfo = localtime(&timestamp);  //localtime_r() do same
-		strftime(&ptr[offset], 9, "%H:%M:%S", timeinfo);
-		offset += 8;
+		tm* timeinfo = localtime(&timestamp);  //localtime_r() do same
+		strftime(&ptr[offset], sizeof(fmt1), fmt1, timeinfo);
+		offset += sizeof(fmt1)-1;
 		if (timeinfo->tm_yday != tm_yday_last) {
-			strftime(&ptr[offset], 10, " %d.%m.%y", timeinfo);
-			offset += 9;
+			strftime(&ptr[offset], sizeof(fmt2), fmt2, timeinfo);
+			offset += sizeof(fmt2)-1;
 			tm_yday_last = timeinfo->tm_yday;
 		}
 		ptr[offset++] = '\n'; //free(timeinfo);
-		 */str += (uint32_t)timestamp; str += "\n";
+		 	//str += (uint32_t)timestamp; str += "\n";
 	}DEBUGLN(); //log_d("%u", ESP.getFreeHeap());
-	//ptr[offset - 1] = '\0';
-	//reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
+	ptr[offset - 1] = '\0';
+	reinterpret_cast<uint32_t*>(&str)[2] = offset; //incapsulation hack //_ptr.len
 try_send: DEBUGLN(str);
 	if (wifi_sta_init()) {
 		if (_bot.sendMessage(msg)) {
@@ -407,9 +413,17 @@ void handleMessage(fb::Update& u) {
 		get_task_list(msg.text); break;
 	case SH("/restart"):
 		bot.reboot(); Flag = RESTART; msg.text = "Restarting..."; break;
-	case SH("/time_sync"):
-		time_sync_unix = uS;
-		timestamp_unix = u[tg_apih::date].toInt(); msg.text = "Done"; break;
+	case SH("/time_sync"): {
+		timeval val {.tv_sec = time(NULL)};
+		settimeofday(&val, NULL);
+	 	msg.text = "Unix time = "; msg.text += val.tv_sec;
+	}break;
+	case SH("/time_sync_tg"): {
+		auto now = u[tg_apih::date];
+		timeval val {.tv_sec = now};
+		settimeofday(&val, NULL);
+	 	msg.text = "Unix time = "; msg.text += val.tv_sec;
+	}
 	case SH("/send_alarm"):
 		send_alarm_time(std::move(msg), bot); return;
 	case SH("/clear_alarm"):
@@ -627,17 +641,18 @@ String get_info(bool ver) {
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 #ifdef CONFIG_GENERIC_LINE
 	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcReadTaskHandle);
+	str += "\nADC value "; str +=  *curr_adc_ptr;
+	str += "\ngerkon_open_high = "; str += gerkon_open_high;
+	str += "\ngerkon_close_high = "; str += gerkon_close_high;
+	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
+	str += "\ngerkon_button_low = ";  str += adc_button_low;
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
 	str += "\nMode_";  str += sets.proxima; str += sets.adc_line;
-	str += "\ngerkon_open_high = "; str += gerkon_open_high;
-	str += "\ngerkon_close_high = "; str += gerkon_close_high;
-	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
-	str += "\nerkon_button_low = ";  str += adc_button_low;
 	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
-	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
+	str += "\nUnix time: "; str += (unsigned)time(NULL);//(timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "ESP_OTA_IMG_PENDING_VERIFY"; }
 		str += ("\nCompiled: " __TIMESTAMP__ "\n");
@@ -647,7 +662,7 @@ String get_info(bool ver) {
 
 void init_sets() {
 #ifdef CONFIG_PROXIMA_PIR
-	if(sets.proxima && !timer_sab) { 
+	if(sets.proxima && !timer_sab) {
 		assert(timer_sab = timer_init(TIMER_SABOTAGE, sabotage_timer));
 		assert(timer_intr = esp_timer_init([](void*) { enableInterrupt(PIN_LINE); } ));
 		attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
@@ -656,7 +671,7 @@ void init_sets() {
 		CHECK_(esp_timer_delete(timer_intr));
 		CHECK_(gptimer_stop(timer_sab));
 		CHECK_(gptimer_disable(timer_sab));
-		CHECK_(gptimer_del_timer(timer_sab)); 
+		CHECK_(gptimer_del_timer(timer_sab));
 		timer_sab = NULL;
 	}
 #endif
