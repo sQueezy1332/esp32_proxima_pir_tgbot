@@ -23,6 +23,7 @@
 #include "esp_wifi.h"
 #include "rom/crc.h"
 #include "esp_adc/adc_continuous.h"
+#include "esp_sntp.h"
 //#include "esp_check.h"
 //#include "mbedtls/md.h"
 //#include "time.h"
@@ -104,8 +105,8 @@ using fb::Message, fb::Fetcher;
 typedef enum : uint8_t {
 	ok = 0,
 	ALARM,
-	DOOR_CLOSE,
-	DOOR_OPEN,
+	GERKON_CLOSE,
+	GERKON_OPEN,
 	LINE_LOW,
 	LINE_HIGH,
 	RELAY_0,
@@ -135,6 +136,7 @@ QueueHandle_t QueueMsgHandle;
 
 __unused adc_continuous_handle_t adc_handle = NULL;
 __unused uint8_t adc_buf[BUF_ADC_SIZE];
+uint32_t* curr_adc_ptr = NULL;
 //uint8_t gerkon_open_low;
 	uint8_t gerkon_open_default = 35;
 	uint8_t gerkon_close_default = 30;
@@ -151,8 +153,8 @@ gptimer_handle_t timer_sab = NULL;
 volatile stat_t Flag = ok;
 __attribute__((unused)) stat_t last_state = ok;
 volatile uint64_t last_interrupt = 0xFFFFFF;
-uint64_t time_sync_unix;
-time_t timestamp_unix;
+//uint64_t time_sync_unix;
+//time_t timestamp_unix;
 __attribute__((unused)) volatile uint32_t interrupt_delta;
 network_event_handle_t event_id;
 nvs_handle_t nvsHandle = 0;
@@ -178,7 +180,7 @@ static bool IRAM_ATTR conv_done_cb(adc_continuous_handle_t, const adc_continuous
 adc_continuous_handle_t continuous_adc_init(adc_continuous_callback_t cb, const adc_channel_t *channel, uint8_t channel_num, uint16_t buf_size);
 
 void read_credentials();
-void time_sync(byte wait_sec = 10);
+//void time_sync(byte wait_sec = 10);
 bool readFile(cch* path, String& Content);
 bool writeFile(cch* path, const String& Content);
 bool appendFile(cch* path, time_t value);
