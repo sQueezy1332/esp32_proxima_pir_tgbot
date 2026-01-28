@@ -134,11 +134,11 @@ void adcReadTask(void*) {
 					out.status = LINE_HIGH;
 				}
 				else if(val > gerkon_close_high) { 
-					if(!sets.alarm || out.status == GERKON_OPEN) continue; 
+					if(!sets.alarm || (out.status == GERKON_OPEN)) continue; 
 					out.status = GERKON_OPEN; 
 				} 
 				else if(val > gerkon_close_low ) { 
-					if(!sets.alarm || out.status == GERKON_CLOSE) continue;  
+					if(!sets.alarm || (out.status == GERKON_CLOSE)) continue;  
 					out.status = GERKON_CLOSE; 
 				} 
 				else if(val > adc_button_low) { //TODO
@@ -152,7 +152,7 @@ void adcReadTask(void*) {
 						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0; 
 					} else continue;
 				}
-				else { if(out.status == LINE_LOW) continue; out.status = LINE_LOW; } //val < adc_button_low
+				else { if(out.status == LINE_LOW) continue; else out.status = LINE_LOW; } //val < adc_button_low
 				out.delta = val; //out.counter = 0;
 				xQueueSend(QueueMsgHandle, &out, 0);
 			}	
@@ -639,6 +639,7 @@ String get_info(bool ver) {
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
+	
 #ifdef CONFIG_GENERIC_LINE
 	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcReadTaskHandle);
 	str += "\nADC value "; str +=  *curr_adc_ptr;
@@ -648,8 +649,9 @@ String get_info(bool ver) {
 	str += "\ngerkon_button_low = ";  str += adc_button_low;
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
-	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
-	str += "\nMode_";  str += sets.proxima; str += sets.adc_line;
+	sets.relay = RELAY_STATE(dRead(PIN_RELAY));
+	//str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
+	str += "\nMode_";  str += sets.alarm; str += sets.proxima; str += sets.adc_line, str += sets.relay;
 	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (unsigned)time(NULL);//(timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
