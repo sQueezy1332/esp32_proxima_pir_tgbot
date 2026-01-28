@@ -140,11 +140,12 @@ void adcReadTask(void*) {
 					//if(++out.counter == ADC_TASK_FREQ);
 					TickType_t now = xTaskGetTickCount();
 					if(now - last_sw > pdMS_TO_TICKS(DEF_SWITCH_DELAY)) {
+						last_sw = now;
 						const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
 						dWrite(PIN_RELAY, new_state);
 						if(!sets.alarm) continue;
-						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0; last_sw = now;
-					}else continue;
+						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0; 
+					} else continue;
 				}
 				else { if(out.status == LINE_LOW) continue; out.status = LINE_LOW; } //val < adc_button_low
 				out.delta = val; //out.counter = 0;
@@ -630,9 +631,10 @@ String get_info(bool ver) {
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
 	str += "\nMode_";  str += sets.proxima; str += sets.adc_line;
-	str += "\ngerkon_open_default = "; str += gerkon_open_default;
-	str += "\ngerkon_close_default = "; str += gerkon_close_default;
-	str += "\ngerkon_button_default = ";  str += gerkon_button_default;
+	str += "\ngerkon_open_high = "; str += gerkon_open_high;
+	str += "\ngerkon_close_high = "; str += gerkon_close_high;
+	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
+	str += "\nerkon_button_low = ";  str += adc_button_low;
 	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
