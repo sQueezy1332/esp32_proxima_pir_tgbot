@@ -9,7 +9,7 @@ extern "C" void app_main() {
 	vTaskSuspend(loopTaskHandle); //vTaskPrioritySet(NULL, 12);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 #ifdef CONFIG_GENERIC_LINE
-	adcReadTaskHandle = xTaskCreateStatic(adcReadTask, "adc", sizeof(xAdcReadStack), NULL, 2, xAdcReadStack, &xAdcReadBuffer);
+	adcTaskHandle = xTaskCreateStatic(adcReadTask, "adc", sizeof(xAdcReadStack), NULL, 2, xAdcReadStack, &xAdcReadBuffer);
 #endif
 	nvs_read_sets();
 	read_credentials();
@@ -29,7 +29,7 @@ extern "C" void app_main() {
 	wifi_ap_init();
 #endif
 	wifi_server_init();
-	if (!wifi_sta_init()) { /*WiFi.begin(DEFAULT_SSID, DEFAULT_PASS);*/ /* if (!wifi_sta_init()) wifi_ap_init(); */ };
+	if (!wifi_sta_init()) {  /* WiFi.begin(DEFAULT_SSID, DEFAULT_PASS,0, NULL);  */};
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); 
 	//sntp_set_time_sync_notification_cb(); //time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot.attachUpdate(updateHandler);
@@ -125,9 +125,9 @@ void adcReadTask(void*) {
                     p = &reinterpret_cast<decltype(p)>(adc_buf)[i];// __unused uint32_t chan_num = EXAMPLE_ADC_GET_CHANNEL(p);
                     val += ADC_GET_DATA(p);
                 }
-                val /= SAMPLE_BUF;
-				uint32_t volt = val * 3300 / 4095; 
-				ESP_LOGD("adc", "Voltage: %u\tValue: %u", volt, val);
+                val /= ret_num;
+				//uint32_t volt = val * 3300 / 4095; 
+				//ESP_LOGD("adc", "Voltage: %u"\tValue: %u", volt, val);
 			if(1) {
 				if(val > gerkon_open_high) { 
 					if(out.status == LINE_HIGH) continue; 
@@ -161,11 +161,6 @@ void adcReadTask(void*) {
             else { ESP_LOGW("ERR", "err = 0x%02X", ret); }
 	
     } //ESP_ERROR_CHECK(adc_continuous_stop(adc_handle)); ESP_ERROR_CHECK(adc_continuous_deinit(adc_handle));
-}
-
-bool conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data) {
-    vTaskNotifyGiveFromISR(adcReadTaskHandle, NULL);
-    return false;
 }
 
 /* void time_sync(byte wait_sec) {
@@ -302,7 +297,7 @@ bool deleteFile(cch* path) {
 	return true;
 }
 /*		WIFI	*/
-bool wifi_sta_init(uint32_t time) {
+bool wifi_sta_init(uint32_t time) {//WiFi.begin()
 	if (WiFi.isConnected() == false) {
 		if (!WiFi.STA.begin(true)) return false; wl_status_t status; log_i("Wait connection %u sec", time);
 		for (; (status = WiFi.status()) != WL_CONNECTED; time--) {
@@ -411,7 +406,7 @@ void handleMessage(fb::Update& u) {
 		msg.text = std::move(get_info()); break;
 	case SH("/task_list"):
 		get_task_list(msg.text); break;
-	case SH("/restart"):
+	case SH("/restart"): //esp_restart();
 		bot.reboot(); Flag = RESTART; msg.text = "Restarting..."; break;
 	case SH("/time_sync"): {
 		timeval val {.tv_sec = time(NULL)};
@@ -419,8 +414,7 @@ void handleMessage(fb::Update& u) {
 	 	msg.text = "Unix time = "; msg.text += val.tv_sec;
 	}break;
 	case SH("/time_sync_tg"): {
-		auto now = u[tg_apih::date];
-		timeval val {.tv_sec = now};
+		timeval val {.tv_sec = u[tg_apih::date]};
 		settimeofday(&val, NULL);
 	 	msg.text = "Unix time = "; msg.text += val.tv_sec;
 	}
@@ -490,8 +484,9 @@ void handleMessage(fb::Update& u) {
 	}
 #else 
 	default: {
-		if(!update_adc_sets(u.message().text()._str, msg.text)) msg.text = "Unknown";
-		}
+		if(update_adc_sets(u.message().text()._str, msg.text)) break;
+		msg.text = "Unknown";
+	}
 	}
 #endif
 	DEBUGLN(msg.text);
@@ -505,6 +500,45 @@ void handleDocument(fb::Update& u) {
 	default: bot.sendMessage(Message("Unknown", u.message().chat().id()));
 	}
 }
+
+void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
+	AutoLed<PIN_LED> led; 
+	vTaskSuspend(sendTaskHandle); vTaskSuspend(adcTaskHandle); 
+	bool temp = sets.alarm; if(temp) alarm_off(false);esp_ota_get_next_update_partition(NULL);
+	const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+	Message msg("OTA begin\nPartition: ", u.message().chat().id());
+	msg.text += part->label; msg.text += "\nsize: "; msg.text += part->size;
+	bot.sendMessage(msg);
+	Fetcher fetch = bot.downloadFile(u.message().document().id());
+	if (fetch) {
+		if ((fetch.*updater)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
+		else { msg.text = "Error = "; msg.text += Update.getError();msg.text += '\n';
+			msg.text += "esp_err = 0x"; msg.text += String(update_error, HEX); update_error = 0;} 
+	}
+	else { msg.text = "Download error"; }
+	log_i("%s", msg.text.c_str());
+	bot.sendMessage(msg);
+	if(temp) alarm_on(false); 
+	vTaskResume(sendTaskHandle); vTaskResume(adcTaskHandle);
+	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+}
+
+void updateHandler(fb::Update& u) {
+	if (u.isMessage() && u.message().from().id() == USER_ID) {
+		if (Flag > CHECK_MSG) Flag = CHECK_MSG;
+		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin"))
+			handleDocument(u);
+		else handleMessage(u);
+	}
+}
+/*		BLUETOOTH		*/
+#ifndef NO_BLE
+esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms) {
+	if (ble_data == nullptr || ble_data_length == 0) return -1; log_d("%u", ESP.getFreeHeap());
+	return ESP_OK;
+}
+#endif
+/*		MISC		*/
 
 bool update_adc_sets(cch* data,  String& text) {
 	if(!strncmp(data,"/mode_", sizeof("/mode_")-1)) {
@@ -546,48 +580,12 @@ bool update_adc_sets(cch* data,  String& text) {
 			} else goto error;
 		} else return false;
 		text += res;
-		init_adc_values();
-	}
+		init_adc_values(); //return true;
+	} else { return false; }
 	return true;
 error: text = "WRONG INPUT"; return true;
 }
 
-void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
-	AutoLed<PIN_LED> led; //vTaskSuspend(sendTaskHandle);
-	bool temp = sets.alarm; if(temp) alarm_off(false);
-	auto ptr = esp_ota_get_next_update_partition(NULL);
-	Message msg("OTA begin\nPartition: ", u.message().chat().id());
-	msg.text += ptr->label; msg.text += "\nsize: "; msg.text += ptr->size;
-	bot.sendMessage(msg);
-	Fetcher fetch = bot.downloadFile(u.message().document().id());
-	if (fetch) {
-		if ((fetch.*updater)()) { msg.text = "Success\nRestarting..."; Flag = RESTART; }
-		else { msg.text = "Error = "; msg.text += Update.getError();msg.text += '\n';
-			msg.text += "esp_err = 0x"; msg.text += String(update_error, HEX); update_error = 0;} 
-	}
-	else { msg.text = "Download error"; }
-	log_i("%s", msg.text.c_str());
-	bot.sendMessage(msg);
-	if(temp) alarm_on(false); vTaskResume(sendTaskHandle);
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
-}
-
-void updateHandler(fb::Update& u) {
-	if (u.isMessage() && u.message().from().id() == USER_ID) {
-		if (Flag > CHECK_MSG) Flag = CHECK_MSG;
-		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin"))
-			handleDocument(u);
-		else handleMessage(u);
-	}
-}
-/*		BLUETOOTH		*/
-#ifndef NO_BLE
-esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms) {
-	if (ble_data == nullptr || ble_data_length == 0) return -1; log_d("%u", ESP.getFreeHeap());
-	return ESP_OK;
-}
-#endif
-/*		MISC		*/
 void read_credentials() {
 	wifi_config_t config {};  size_t ssid_l, pass_l;
 	esp_wifi_get_config(WIFI_IF_STA, &config);log_d("%s\tpass: %s", config.sta.ssid,config.sta.password);
@@ -635,13 +633,13 @@ void get_task_list(String& str) {
 
 String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
-	String str; str.reserve(350);
+	String str; str.reserve(400);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
 	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(NULL);
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 	
 #ifdef CONFIG_GENERIC_LINE
-	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcReadTaskHandle);
+	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcTaskHandle);
 	str += "\nADC value "; str +=  *curr_adc_ptr;
 	str += "\ngerkon_open_high = "; str += gerkon_open_high;
 	str += "\ngerkon_close_high = "; str += gerkon_close_high;
@@ -649,16 +647,18 @@ String get_info(bool ver) {
 	str += "\ngerkon_button_low = ";  str += adc_button_low;
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
-	sets.relay = RELAY_STATE(dRead(PIN_RELAY));
+	//sets.relay = RELAY_STATE(dRead(PIN_RELAY));
 	//str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
-	str += "\nMode_";  str += sets.alarm; str += sets.proxima; str += sets.adc_line, str += sets.relay;
+	str += "\nSettings:\nalarm "; str += sets.alarm, str += "; proxima "; 
+	str += sets.proxima; str += "; adc_line "; str += sets.adc_line; str += ";relay "; str += sets.relay;
+	//str += "\nMode_";  str += sets.alarm; str += sets.proxima; str += sets.adc_line, str += sets.relay;
 	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (unsigned)time(NULL);//(timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
-		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "ESP_OTA_IMG_PENDING_VERIFY"; }
+		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "\nESP_OTA_IMG_PENDING_VERIFY"; }
 		str += ("\nCompiled: " __TIMESTAMP__ "\n");
-	} ESP_LOGI("get_info","%u", str.length());
+	} ESP_LOGD("get_info","%u", str.length());
 	return str;
 }
 
@@ -684,10 +684,10 @@ void init_sets() {
 		//ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
 		gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
 	    gpio_config(&conf);
-		vTaskResume(adcReadTaskHandle);
+		vTaskResume(adcTaskHandle);
 	}
 	else if (!sets.adc_line && adc_handle) {
-		vTaskSuspend(adcReadTaskHandle);
+		vTaskSuspend(adcTaskHandle);
 		CHECK_(adc_continuous_stop(adc_handle)); 
 		CHECK_(adc_continuous_deinit(adc_handle));
 		adc_handle = NULL;
