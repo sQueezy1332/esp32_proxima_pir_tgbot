@@ -51,7 +51,8 @@ static_assert(sizeof(time_t) == 4);
 #define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
 #define RELAY_STATE(x) (!x)
 #define DEF_SWITCH_DELAY (900)
-#define ADC_VALUE_FRACT	(5)
+#define ADC_DRIFT_PLUS (6)
+#define ADC_DRIFT_MINUS (3)
 #if defined ESP32C3_LUATOS
 //#define PIN_PULLUP 5
 #define PIN_LED_D5 13
@@ -128,7 +129,7 @@ typedef struct { String ssid,pass; } auth_t;
 
 StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE], xAdcReadStack[4096];
 StaticTask_t xMainTaskBuffer, xSendTaskBuffer, xAdcReadBuffer;
-TaskHandle_t loopTaskHandle, sendTaskHandle, adcReadTaskHandle;
+TaskHandle_t loopTaskHandle, sendTaskHandle, adcTaskHandle;
 
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
 StaticQueue_t xStaticQueue;
@@ -176,7 +177,9 @@ void sabotageCallback(TimerHandle_t);
 static void adcReadTask(void*);
 static void IRAM_ATTR isr_handler(/*void**/);
 static bool IRAM_ATTR sabotage_timer(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*);
-static bool IRAM_ATTR conv_done_cb(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *);
+static bool IRAM_ATTR conv_done_cb(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *) {
+    vTaskNotifyGiveFromISR(adcTaskHandle, NULL); return false;
+};
 adc_continuous_handle_t continuous_adc_init(adc_continuous_callback_t cb, const adc_channel_t *channel, uint8_t channel_num, uint16_t buf_size);
 
 void read_credentials();
@@ -223,10 +226,10 @@ bool auth_handler(AsyncWebServerRequest*& request) {
 }
 
 void init_adc_values() { 
-	gerkon_open_high = (gerkon_open_default * 100)/ 100.f * (100+ADC_VALUE_FRACT);
-	gerkon_close_high = (gerkon_close_default * 100) / 100.f * (100+ADC_VALUE_FRACT);
-	gerkon_close_low = (gerkon_close_default * 100) / 100.f * (100-ADC_VALUE_FRACT);
-	adc_button_low = (gerkon_button_default * 100) / 100.f * (100-(ADC_VALUE_FRACT *2));
+	gerkon_open_high = (gerkon_open_default * 100)/ 100.f * (100+ADC_DRIFT_PLUS);
+	gerkon_close_high = (gerkon_close_default * 100) / 100.f * (100+ADC_DRIFT_PLUS);
+	gerkon_close_low = (gerkon_close_default * 100) / 100.f * (100-ADC_DRIFT_MINUS);
+	adc_button_low = (gerkon_button_default * 100) / 100.f * (100-(ADC_DRIFT_MINUS)*2);
 	ESP_LOGI(TAG, "open_high %u, close_high %u, close_low %u, adc_button_low %u", 
 		gerkon_open_high, gerkon_close_high, gerkon_close_low, adc_button_low);
 }
