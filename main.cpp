@@ -5,15 +5,12 @@ extern "C" void app_main() {
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE, PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
-	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
-	vTaskSuspend(loopTaskHandle); //vTaskPrioritySet(NULL, 12);
-	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 #ifdef CONFIG_GENERIC_LINE
+	init_adc_values();
 	adcTaskHandle = xTaskCreateStatic(adcReadTask, "adc", sizeof(xAdcReadStack), NULL, 2, xAdcReadStack, &xAdcReadBuffer);
 #endif
 	nvs_read_sets();
-	read_credentials();
-	init_adc_values();
+	//read_credentials();
 	init_sets();
 	sets.alarm ? alarm_on(false) : alarm_off(false);
 	SPIFFS.begin();
@@ -36,26 +33,29 @@ extern "C" void app_main() {
 	bot.skipUpdates(-2);
 	bot.setPollMode(fb::Poll::Long, 30000);
 	botSend.client.setHandshakeTimeout(5); bot.client.setHandshakeTimeout(15);
-	send_alarm_time(Message("", CHAT_ID), bot, false);
-	bot.sendMessage(Message(get_info(true), CHAT_ID));
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
-	vTaskResume(loopTaskHandle);
+	//vTaskPrioritySet(NULL, 12);
+	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
+	vTaskSuspend(loopTaskHandle);
+	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
+	ESP_LOGI(TAG, "StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	vTaskResume(loopTaskHandle); /* vTaskResume(sendTaskHandle); */
 }
 
 void mainTask(void*) {
-	for (TickType_t lastTry = 0;; /* led_blink() */ ) {//CHANGED
+	for (TickType_t lastTry = 0;;) {
 		switch (Flag) {
 		case RESEND_MSG: 
 		if (xTaskGetTickCount() - lastTry > pdMS_TO_TICKS(15 * 60 * 1000)) {
-			if(send_alarm_time()) Flag = CHECK_MSG; lastTry = xTaskGetTickCount(); log_i("%u", Flag);
+			if(send_alarm_time()) { Flag = CHECK_MSG; }
+			lastTry = xTaskGetTickCount(); log_i("%u", Flag);
 		}
 		case CHECK_MSG: 
 			{ AutoLed <PIN_LED_D5> led;
 			if (wifi_sta_init()) { delay(10); bot.tick(); } } 
-			delay(FB_LONG_POLL_TOUT);	continue;
+			delay(FB_LONG_POLL_TOUT - 10);continue;
 		case WIFI_DISCONNECT: {
 			//if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(5000)) != ESP_OK) {ESP_LOGI(TAG, "Update system time timeout");}
-			time_t now = time(NULL); ESP_LOGI(TAG, "%lu", now);
+			__unused time_t now = time(NULL); ESP_LOGI(TAG, "%lu", now);
 			WiFi.disconnect();
 			}
 			ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(60 * 60 * 1000));
@@ -65,13 +65,15 @@ void mainTask(void*) {
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: bot.tickManual(); esp_restart(); return;
-		default: vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
+		default:  vTaskDelay(1);   ESP_LOGI("main",""); Flag = CHECK_MSG;
 		}
 	}
 }
 
 void sendTask(void*) {
-	Message msg("", CHAT_ID); tgMsg_t event;
+	Message msg(get_info(true), CHAT_ID); tgMsg_t event;
+	botSend.sendMessage(std::move(msg));
+	send_alarm_time(std::move(msg), botSend, false);
 	for (TickType_t tick = 0;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
 			AutoLed<PIN_LED> led; 
@@ -84,6 +86,7 @@ void sendTask(void*) {
 				case LINE_HIGH: msg.text = "LINE_HIGH"; break;
 				case RELAY_0: msg.text = "RELAY_OFF"; break;
 				case RELAY_1: msg.text = "RELAY_ON"; break;
+				case RESEND_MSG: send_alarm_time(std::move(msg)); return;
 				case ok: msg.text = "OK";
 					if(event.counter) { CHECK_(timer_alarm(timer_sab, TIMER_SABOTAGE)); }
 					break; //goto _OK;
@@ -92,7 +95,7 @@ void sendTask(void*) {
 				msg.text.concat('\t'); msg.text.concat(event.delta);
 				//_OK: //if (event.counter > 1) { msg.text.concat("\t%\t"); msg.text.concat(event.counter); }
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000)); tick = xTaskGetTickCount();
-				log_i("%s", msg.text.c_str()); //if(!dRead(PIN_BUTTON)) goto save;
+				ESP_LOGI("sendTask()","%s", msg.text.c_str()); //if(!dRead(PIN_BUTTON)) goto save;
 				if (botSend.sendMessage(msg)) {
 					if(Flag > CHECK_MSG) resumeTask(); log_v(""); 
 					continue;
@@ -127,7 +130,7 @@ void adcReadTask(void*) {
                 }
                 val /= ret_num;
 				//uint32_t volt = val * 3300 / 4095; 
-				//ESP_LOGD("adc", "Voltage: %u"\tValue: %u", volt, val);
+				ESP_LOGD("adc", "Value: ", val);
 			if(1) {
 				if(val > gerkon_open_high) { 
 					if(out.status == LINE_HIGH) continue; 
@@ -141,7 +144,7 @@ void adcReadTask(void*) {
 					if(!sets.alarm || (out.status == GERKON_CLOSE)) continue;  
 					out.status = GERKON_CLOSE; 
 				} 
-				else if(val > adc_button_low) { //TODO
+				else if(val > gerkon_button_low) { //TODO
 					//if(++out.counter == ADC_TASK_FREQ);
 					TickType_t now = xTaskGetTickCount();
 					if(now - last_sw > pdMS_TO_TICKS(DEF_SWITCH_DELAY)) {
@@ -208,8 +211,9 @@ static bool sabotage_timer(gptimer_handle_t tmr, const gptimer_alarm_event_data_
 }
 
 /*		FILE SYSTEM	*/
+
 bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
-	DEBUG("Reading file: "); DEBUG(ALARM_PATH); //sizeof(Message);108
+	ESP_LOGI(TAG, "Reading file: %s", ALARM_PATH); //sizeof(Message);108
 	String& str = msg.text; File file = SPIFFS.open(ALARM_PATH, FILE_READ);
 	if (!file || file.isDirectory() || !file.available()) {
 		DEBUGLN(" failed to open file for reading");
@@ -220,8 +224,8 @@ bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
 	__unused char* ptr; size_t offset; time_t timestamp = 0; __unused int tm_yday_last = 0;
 	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
-		str += "file_size \n"; str += file_size; str += "count \n";
-		str += count; str += "str_len \n"; str += str_len; str += "HEAP \n"; str += heap;
+		str = "file_size "; str += file_size; str += "\ncount ";
+		str += count; str += "\nstr_len "; str += str_len; str += "\nHEAP "; str += heap;
 		goto try_send;
 	} ptr = str.begin();
 	static const char fmt1[] = "%H:%M:%S", fmt2[] = " %d.%m.%y";
@@ -404,6 +408,8 @@ void handleMessage(fb::Update& u) {
 		alarm_off(); msg.text = "Alarm off"; break;	
 	case SH("/info"):
 		msg.text = std::move(get_info()); break;
+	case SH("/adc"):
+		msg.text = "ADC value = "; msg.text += *curr_adc_ptr; break;
 	case SH("/task_list"):
 		get_task_list(msg.text); break;
 	case SH("/restart"): //esp_restart();
@@ -418,8 +424,9 @@ void handleMessage(fb::Update& u) {
 		settimeofday(&val, NULL);
 	 	msg.text = "Unix time = "; msg.text += val.tv_sec;
 	}
-	case SH("/send_alarm"):
-		send_alarm_time(std::move(msg), bot); return;
+	case SH("/send_alarm"): 
+		{stat_t t = RESEND_MSG;xQueueSend(QueueMsgHandle, &t, 0);} break;
+		//send_alarm_time(std::move(msg), bot); return;
 	case SH("/clear_alarm"):
 		msg.text = deleteFile(ALARM_PATH) ? "Done" : "No file"; break;
 	case SH("/valid"):
@@ -561,22 +568,28 @@ bool update_adc_sets(cch* data,  String& text) {
 		unsigned res; data += sizeof("/gerkon_")-1;
 		if(!strncmp(data, "open_", sizeof("open_")-1)) {
 			data += sizeof("open_")-1;
-			if((res = atoi(data) > 0)) {
-				gerkon_open_default = res;
+			if((res = atoi(data) > 0) && res < 4095) {
+				gerkon_open_high = res;
 				text = "gerkon_open_default = "; text += res;
 			} else goto error;
 		}
 		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
 			data += sizeof("close_")-1;
-			if((res = atoi(data) > 0)) {
-				gerkon_close_default = res;
+			if((res = atoi(data) > 0) && res < 4095) {
+				gerkon_close_low = res;
 				text = "gerkon_close_default = "; text += res;
 			} else goto error;
 		} else if(!strncmp(data, "button_", sizeof("button_")-1)) {
 			data += sizeof("button_")-1;
-			if((res = atoi(data) > 0)) {
-				gerkon_button_default = res;
+			if((res = atoi(data) > 0) && res < 4095) {
+				gerkon_button_low = res;
 				text = "gerkon_button_default = "; 
+			} else goto error;
+		} else if(!strncmp(data, "percent_", sizeof("percent_")-1)) {
+			data += sizeof("percent_")-1;
+			if((res = atoi(data) > 0) && res < 30) {
+				gerkon_button_low = res;
+				text = "gerkon_percent_drift = "; 
 			} else goto error;
 		} else return false;
 		text += res;
@@ -590,6 +603,10 @@ void read_credentials() {
 	wifi_config_t config {};  size_t ssid_l, pass_l;
 	esp_wifi_get_config(WIFI_IF_STA, &config);log_d("%s\tpass: %s", config.sta.ssid,config.sta.password);
 	ssid_l = strlen((char*)config.sta.ssid); pass_l = strlen((char*)config.sta.password);
+	for (size_t i = 0; i < 16; i++) putchar((config.sta.ssid)[i]);
+	for (size_t i = 0; i < 16; i++) putchar((config.sta.password)[i]);
+	putchar('\r');putchar('\n');
+	
 	if (ssid_l < 1 || pass_l < 8) {
 		log_w("ssid len %u, pass len %u", ssid_l, pass_l);
   		config.sta.threshold.rssi = -127;
@@ -644,7 +661,7 @@ String get_info(bool ver) {
 	str += "\ngerkon_open_high = "; str += gerkon_open_high;
 	str += "\ngerkon_close_high = "; str += gerkon_close_high;
 	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
-	str += "\ngerkon_button_low = ";  str += adc_button_low;
+	str += "\ngerkon_button_low = ";  str += gerkon_button_low;
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	//sets.relay = RELAY_STATE(dRead(PIN_RELAY));
@@ -652,7 +669,7 @@ String get_info(bool ver) {
 	str += "\nSettings:\nalarm "; str += sets.alarm, str += "; proxima "; 
 	str += sets.proxima; str += "; adc_line "; str += sets.adc_line; str += ";relay "; str += sets.relay;
 	//str += "\nMode_";  str += sets.alarm; str += sets.proxima; str += sets.adc_line, str += sets.relay;
-	if(last_interrupt != 0xFFFFFF) { str += "\nlast_interrupt: "; str += last_interrupt; }
+	if(sets.proxima/* last_interrupt != 0xFFFFFF */) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (unsigned)time(NULL);//(timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
@@ -682,7 +699,7 @@ void init_sets() {
 		adc_channel_t channel[] = { PIN_ADC_LINE }; int size = sizeof(channel)/sizeof(adc_channel_t);
 		assert(adc_handle = continuous_adc_init(conv_done_cb, channel, size, BUF_ADC_SIZE)); 
 		//ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
-		gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
+		gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP) | BIT(PIN_ADC_PULLUP2), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
 	    gpio_config(&conf);
 		vTaskResume(adcTaskHandle);
 	}
