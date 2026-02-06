@@ -46,13 +46,12 @@ static_assert(sizeof(time_t) == 4);
 #define PIN_LINE 4
 #define PIN_ADC_LINE ADC_CHANNEL_1
 #define PIN_ADC_PULLUP 0
+#define PIN_ADC_PULLUP2 3
 #define SAMPLE_BUF				64
 #define ADC_TASK_FREQ			10
 #define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
 #define RELAY_STATE(x) (!x)
 #define DEF_SWITCH_DELAY (900)
-#define ADC_DRIFT_PLUS (6)
-#define ADC_DRIFT_MINUS (3)
 #if defined ESP32C3_LUATOS
 //#define PIN_PULLUP 5
 #define PIN_LED_D5 13
@@ -138,14 +137,12 @@ QueueHandle_t QueueMsgHandle;
 __unused adc_continuous_handle_t adc_handle = NULL;
 __unused uint8_t adc_buf[BUF_ADC_SIZE];
 uint32_t* curr_adc_ptr = NULL;
-//uint8_t gerkon_open_low;
-	uint8_t gerkon_open_default = 35;
-	uint8_t gerkon_close_default = 30;
-	uint8_t gerkon_button_default = 20;
-uint16_t gerkon_open_high;
-uint16_t gerkon_close_high;
-uint16_t gerkon_close_low;
-uint16_t adc_button_low;
+
+uint16_t gerkon_open_high = ADC_OPEN_DEF;
+uint16_t gerkon_close_high = 0;
+uint16_t gerkon_close_low = ADC_CLOSE_DEF;
+uint16_t gerkon_button_low = ADC_BUTTON_DEF;
+uint8_t gerkon_percent_drift = ADC_PERCENT_DEF;
 
 //StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
 esp_timer_handle_t timer_intr, timer_pwr;
@@ -226,12 +223,12 @@ bool auth_handler(AsyncWebServerRequest*& request) {
 }
 
 void init_adc_values() { 
-	gerkon_open_high = (gerkon_open_default * 100)/ 100.f * (100+ADC_DRIFT_PLUS);
-	gerkon_close_high = (gerkon_close_default * 100) / 100.f * (100+ADC_DRIFT_PLUS);
-	gerkon_close_low = (gerkon_close_default * 100) / 100.f * (100-ADC_DRIFT_MINUS);
-	adc_button_low = (gerkon_button_default * 100) / 100.f * (100-(ADC_DRIFT_MINUS)*2);
+	gerkon_open_high = gerkon_open_high / 100.f * (100 + gerkon_percent_drift);
+	gerkon_close_high = gerkon_close_low / 100.f * (100 + gerkon_percent_drift);
+	gerkon_close_low = gerkon_close_low / 100.f * (100 - gerkon_percent_drift);
+	gerkon_button_low = gerkon_button_low / 100.f * (100 - gerkon_percent_drift);
 	ESP_LOGI(TAG, "open_high %u, close_high %u, close_low %u, adc_button_low %u", 
-		gerkon_open_high, gerkon_close_high, gerkon_close_low, adc_button_low);
+		gerkon_open_high, gerkon_close_high, gerkon_close_low, gerkon_button_low);
 }
 
 void ota_progress(size_t progress, size_t size) {
