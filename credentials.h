@@ -30,10 +30,15 @@
 
 #define BLE_SET "/ble_set"
 #define PIN_GEN "/pin_gen"
-#define PIN_PASS_SET "/pin_pass_set"
 #define RELAY_ON "/relay_on"
 #define RELAY_OFF "relay_off"
 #define SSID_PATH "/ssid.txt"
 #define PASS_PATH "/pass.txt"
 #define ALARM_PATH "/alarm.bin"
+
+#define ADC_OPEN_DEF (0)
+#define ADC_CLOSE_DEF (0)
+#define ADC_BUTTON_DEF (0)
+#define ADC_PERCENT_DEF (10)
+
 
