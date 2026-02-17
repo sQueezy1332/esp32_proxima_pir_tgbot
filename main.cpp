@@ -65,12 +65,13 @@ void mainTask(void*) {
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: bot.tickManual(); esp_restart(); return;
-		default:  vTaskDelay(1);   ESP_LOGI("main",""); Flag = CHECK_MSG;
+		default:  vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
 		}
 	}
 }
 
 void sendTask(void*) {
+	vTaskDelay(1);
 	Message msg(get_info(true), CHAT_ID); tgMsg_t event;
 	botSend.sendMessage(std::move(msg));
 	send_alarm_time(std::move(msg), botSend, false);
@@ -130,7 +131,7 @@ void adcReadTask(void*) {
                 }
                 val /= ret_num;
 				//uint32_t volt = val * 3300 / 4095; 
-				ESP_LOGD("adc", "Value: ", val);
+				ESP_LOGV("adc", "Value: %u", val);
 			if(1) {
 				if(val > gerkon_open_high) { 
 					if(out.status == LINE_HIGH) continue; 
@@ -491,7 +492,9 @@ void handleMessage(fb::Update& u) {
 	}
 #else 
 	default: {
+#ifdef CONFIG_GENERIC_LINE
 		if(update_adc_sets(u.message().text()._str, msg.text)) break;
+#endif
 		msg.text = "Unknown";
 	}
 	}
@@ -508,7 +511,7 @@ void handleDocument(fb::Update& u) {
 	}
 }
 
-void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
+void otaBegin(fb::Update& u, bool(Fetcher::*updater)()) {
 	AutoLed<PIN_LED> led; 
 	vTaskSuspend(sendTaskHandle); vTaskSuspend(adcTaskHandle); 
 	bool temp = sets.alarm; if(temp) alarm_off(false);esp_ota_get_next_update_partition(NULL);
@@ -523,11 +526,11 @@ void otaBegin(fb::Update& u, bool(Fetcher::* updater)()) {
 			msg.text += "esp_err = 0x"; msg.text += String(update_error, HEX); update_error = 0;} 
 	}
 	else { msg.text = "Download error"; }
-	log_i("%s", msg.text.c_str());
+	ESP_LOGI(FUN, msg.text.c_str());
 	bot.sendMessage(msg);
 	if(temp) alarm_on(false); 
 	vTaskResume(sendTaskHandle); vTaskResume(adcTaskHandle);
-	log_d("StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
+	ESP_LOGD(FUN, "StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void updateHandler(fb::Update& u) {
@@ -568,30 +571,31 @@ bool update_adc_sets(cch* data,  String& text) {
 		unsigned res; data += sizeof("/gerkon_")-1;
 		if(!strncmp(data, "open_", sizeof("open_")-1)) {
 			data += sizeof("open_")-1;
-			if((res = atoi(data) > 0) && res < 4095) {
+			if((res = atoi(data)) > 0 && res < 4095) {
 				gerkon_open_high = res;
 				text = "gerkon_open_default = "; text += res;
 			} else goto error;
 		}
 		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
 			data += sizeof("close_")-1;
-			if((res = atoi(data) > 0) && res < 4095) {
+			if((res = atoi(data)) > 0 && res < 4095) {
 				gerkon_close_low = res;
 				text = "gerkon_close_default = "; text += res;
 			} else goto error;
 		} else if(!strncmp(data, "button_", sizeof("button_")-1)) {
 			data += sizeof("button_")-1;
-			if((res = atoi(data) > 0) && res < 4095) {
+			if((res = atoi(data)) > 0 && res < 4095) {
 				gerkon_button_low = res;
 				text = "gerkon_button_default = "; 
 			} else goto error;
 		} else if(!strncmp(data, "percent_", sizeof("percent_")-1)) {
 			data += sizeof("percent_")-1;
-			if((res = atoi(data) > 0) && res < 30) {
-				gerkon_button_low = res;
+			if((res = atoi(data)) > 0 && res < 30) {
+				gerkon_percent_drift = res;
 				text = "gerkon_percent_drift = "; 
 			} else goto error;
 		} else return false;
+		ESP_LOGI(TAG, "%u", res);
 		text += res;
 		init_adc_values(); //return true;
 	} else { return false; }
@@ -622,7 +626,7 @@ void nvs_read_sets() {
         auto ret = nvs_get_u32(nvs, NVS_KEY, reinterpret_cast<uint32_t*>(&sets)); //reinterpret_cast<uint32_t*>(&sets)
         if (ret == ESP_OK) {
             //if (crc8_le(0, (byte*)&sets, 3) == sets.crc) {
-				ESP_LOGI(TAG, "Alarm %u, relay %u, proxima  %u, adc_line %u", 
+				ESP_LOGI(FUN, "Alarm %u, relay %u, proxima  %u, adc_line %u", 
 					sets.alarm, sets.relay, sets.proxima, sets.adc_line);
 	            //sets.alarm ? alarm_on(false) : alarm_off(false);
                 return;
@@ -641,7 +645,7 @@ void nvs_write_sets(nvsApi nvs) {
 }
 
 void get_task_list(String& str) {
-	auto num = uxTaskGetNumberOfTasks(); log_d("GetNumberOfTasks = %u", num);
+	auto num = uxTaskGetNumberOfTasks(); ESP_LOGD(TAG,"GetNumberOfTasks = %u", num);
 	if (!str.reserve(num * 35)) return;
 	char* const ptr = str.begin();
 	vTaskList(ptr);
@@ -652,9 +656,8 @@ String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(400);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(NULL);
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
-	
 #ifdef CONFIG_GENERIC_LINE
 	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcTaskHandle);
 	str += "\nADC value "; str +=  *curr_adc_ptr;
@@ -662,6 +665,7 @@ String get_info(bool ver) {
 	str += "\ngerkon_close_high = "; str += gerkon_close_high;
 	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
 	str += "\ngerkon_button_low = ";  str += gerkon_button_low;
+	str += "\ngerkon_percent_drift = ";  str += gerkon_percent_drift;
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	//sets.relay = RELAY_STATE(dRead(PIN_RELAY));
