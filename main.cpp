@@ -5,10 +5,6 @@ extern "C" void app_main() {
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE, PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
-#ifdef CONFIG_GENERIC_LINE
-	init_adc_values();
-	adcTaskHandle = xTaskCreateStatic(adcReadTask, "adc", sizeof(xAdcReadStack), NULL, 2, xAdcReadStack, &xAdcReadBuffer);
-#endif
 	nvs_read_sets();
 	//read_credentials();
 	init_sets();
@@ -30,9 +26,9 @@ extern "C" void app_main() {
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); 
 	//sntp_set_time_sync_notification_cb(); //time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot.attachUpdate(updateHandler);
-	bot.skipUpdates(-2);
+	bot.skipNextMessage();
 	bot.setPollMode(fb::Poll::Long, 30000);
-	botSend.client.setHandshakeTimeout(5); bot.client.setHandshakeTimeout(15);
+	botSend.client.setHandshakeTimeout(10); bot.client.setHandshakeTimeout(15);
 	//vTaskPrioritySet(NULL, 12);
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
 	vTaskSuspend(loopTaskHandle);
@@ -49,9 +45,15 @@ void mainTask(void*) {
 			if(send_alarm_time()) { Flag = CHECK_MSG; }
 			lastTry = xTaskGetTickCount(); log_i("%u", Flag);
 		}
-		case CHECK_MSG: 
-			{ AutoLed <PIN_LED_D5> led;
-			if (wifi_sta_init()) { delay(10); bot.tick(); } } 
+		case CHECK_MSG: { 
+			AutoLed <PIN_LED_D5> led;
+			if (wifi_sta_init()) { 
+				delay(10); 
+				if(bot.tick()) {
+
+				};
+			} 
+		}
 			delay(FB_LONG_POLL_TOUT - 10);continue;
 		case WIFI_DISCONNECT: {
 			//if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(5000)) != ESP_OK) {ESP_LOGI(TAG, "Update system time timeout");}
@@ -65,17 +67,16 @@ void mainTask(void*) {
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
 		case RESTART: bot.tickManual(); esp_restart(); return;
-		default:  vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
+		default: vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
 		}
 	}
 }
 
 void sendTask(void*) {
-	vTaskDelay(1);
-	Message msg(get_info(true), CHAT_ID); tgMsg_t event;
+	Message msg(get_info(true), CHAT_ID); tgMsg_t event; TickType_t tick = 0;
 	botSend.sendMessage(std::move(msg));
 	send_alarm_time(std::move(msg), botSend, false);
-	for (TickType_t tick = 0;;) {
+	for (;;) {
 		if (xQueueReceive(QueueMsgHandle, &event, portMAX_DELAY) == pdPASS) {
 			AutoLed<PIN_LED> led; 
 			if (wifi_sta_init()) {
@@ -156,7 +157,10 @@ void adcReadTask(void*) {
 						out.status = RELAY_STATE(new_state) ? RELAY_1 : RELAY_0; 
 					} else continue;
 				}
-				else { if(out.status == LINE_LOW) continue; else out.status = LINE_LOW; } //val < adc_button_low
+				else { 
+					if(out.status == LINE_LOW) continue; 
+					else out.status = LINE_LOW; 
+				} //val < adc_button_low
 				out.delta = val; //out.counter = 0;
 				xQueueSend(QueueMsgHandle, &out, 0);
 			}	
@@ -302,13 +306,14 @@ bool deleteFile(cch* path) {
 	return true;
 }
 /*		WIFI	*/
-bool wifi_sta_init(uint32_t time) {//WiFi.begin()
+bool wifi_sta_init(uint32_t timer) {//WiFi.begin()
 	if (WiFi.isConnected() == false) {
-		if (!WiFi.STA.begin(true)) return false; wl_status_t status; log_i("Wait connection %u sec", time);
-		for (; (status = WiFi.status()) != WL_CONNECTED; time--) {
-			if (time == 0) { log_w("Not connected"); return false; }
+		if (!WiFi.STA.begin(true)) return false;
+		wl_status_t status;  ESP_LOGI(TAG, "Wait connection %u ms", STA_INIT_DELAY * timer);
+		for (; (status = WiFi.status()) != WL_CONNECTED; timer--) {
+			if (timer == 0) { ESP_LOGW(TAG, "Not connected"); return false; }
 			delay(STA_INIT_DELAY); DEBUG(status); DEBUG(' ');
-		} DEBUGLN(status); log_d("%u", time);
+		} ESP_LOGI(TAG, "status: %u timer: %u", status, timer);
 	}
 	return true;
 }
@@ -324,57 +329,12 @@ void wifi_ap_init() {
 	DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());DEBUGLN();
 }
 
-void wifi_server_init() {
-	/* __weak_symbol  */extern AsyncWebServer server;
-	server.onNotFound([](AsyncWebServerRequest* request) {
-		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
-		request->send(404, "text/plain", "Not found");
-		});
-	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) { String str;
-		if(Auth) { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n";
-			resumeTask(WIFI_INIT); }
-		else { str = "Auth empty"; } 
-		request->send(200, "text/plain", str); 
-		});
-	server.on("/disconnect", HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(200, "text/plain", "Disconnecting..."); resumeTask(WIFI_DISCONNECT);
-		});
-	server.on("/restart", HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(200, "text/plain", "Esp restarting...");
-		resumeTask(RESTART);
-		});
-	server.on("/alarm_on", HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(200, "text/plain", "Alarm on"); alarm_on();
-		});
-	server.on("/alarm_off", HTTP_GET, [](AsyncWebServerRequest* request) {
-		request->send(200, "text/plain", "Alarm off"); alarm_off();
-		});
-	server.on(CHANGE_AUTH, HTTP_GET, [](AsyncWebServerRequest* request) {
-		auto response = request->beginResponse(SPIFFS, CHANGE_FAILE_PATH, "text/html");
-		response->addHeader(asyncsrv::T_Content_Encoding, "gzip");
-		request->send(response);
-		});
-	server.on(CHANGE_AUTH, HTTP_POST, onConfigRequest);
-#if defined RELAY
-	server.on(RELAY_ON, HTTP_GET, [](AsyncWebServerRequest* request) {
-		const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
-		dWrite(PIN_RELAY, new_state);
-		request->send(200, "text/plain", RELAY_STATE(new_state) ? "RELAY ON" : "RELAY OFF");
-		});
-#endif
-	ota::server_init(server
-#ifdef DEBUG_ENABLE
-		, ota_progress
-#endif // DEBUG_ENABLE
-	);
-	server.begin(); log_v("server.begin()");
-}
-
 void onWiFiConnected(arduino_event_id_t event) {
 	if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-		WiFi.removeEvent(event_id); event_id = 0; log_d("");
+		WiFi.removeEvent(event_id); event_id = 0;
 		resumeTask(RESEND_MSG);
-	} else { log_d( "%u", event); }
+	}
+	ESP_LOGI(TAG, "arduino_event_id: %u", event);
 }
 
 void onConfigRequest(AsyncWebServerRequest* request) {
@@ -444,7 +404,8 @@ void handleMessage(fb::Update& u) {
 #if defined RELAY
 	case SH(RELAY_ON): {
 		const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
-		dWrite(PIN_RELAY, new_state); //msg.text = "RELAY ON"; 
+		dWrite(PIN_RELAY, new_state); msg.text = "RELAY "; 
+		msg.text += RELAY_STATE(new_state) ? '1' : '0';
 	} break;
 #endif
 #ifndef FIRST_BUILD
@@ -541,6 +502,52 @@ void updateHandler(fb::Update& u) {
 		else handleMessage(u);
 	}
 }
+
+void wifi_server_init() {
+	/* __weak_symbol  */extern AsyncWebServer server;
+	server.onNotFound([](AsyncWebServerRequest* request) {
+		DEBUGLN("[" + request->client()->remoteIP().toString() + "] HTTP GET request of " + request->url());
+		request->send(404, "text/plain", "Not found");
+		});
+	server.on("/connect", HTTP_GET, [](AsyncWebServerRequest* request) { String str;
+		if(Auth) { str = "Connecting to:\n"; str += "SSID = ["; str += (Auth->ssid); str += "]\n"; str += "PASS = ["; str += Auth->pass; str += "]\n";
+			resumeTask(WIFI_INIT); }
+		else { str = "Auth empty"; } 
+		request->send(200, "text/plain", str); 
+		});
+	server.on("/disconnect", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "Disconnecting..."); resumeTask(WIFI_DISCONNECT);
+		});
+	server.on("/restart", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "Esp restarting...");
+		resumeTask(RESTART);
+		});
+	server.on("/alarm_on", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "Alarm on"); alarm_on();
+		});
+	server.on("/alarm_off", HTTP_GET, [](AsyncWebServerRequest* request) {
+		request->send(200, "text/plain", "Alarm off"); alarm_off();
+		});
+	server.on(CHANGE_AUTH, HTTP_GET, [](AsyncWebServerRequest* request) {
+		auto response = request->beginResponse(SPIFFS, CHANGE_FAILE_PATH, "text/html");
+		response->addHeader(asyncsrv::T_Content_Encoding, "gzip");
+		request->send(response);
+		});
+	server.on(CHANGE_AUTH, HTTP_POST, onConfigRequest);
+#if defined RELAY
+	server.on(RELAY_ON, HTTP_GET, [](AsyncWebServerRequest* request) {
+		const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
+		dWrite(PIN_RELAY, new_state);
+		request->send(200, "text/plain", RELAY_STATE(new_state) ? "RELAY ON" : "RELAY OFF");
+		});
+#endif
+	ota::server_init(server
+#ifdef DEBUG_ENABLE
+		, ota_progress
+#endif // DEBUG_ENABLE
+	);
+	server.begin(); log_v("server.begin()");
+}
 /*		BLUETOOTH		*/
 #ifndef NO_BLE
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms) {
@@ -564,6 +571,7 @@ bool update_adc_sets(cch* data,  String& text) {
 			text = "Proxima "; text += proxima ? "ON": "OFF";
 			text += "\nADC_Line "; text += adc ? "ON": "OFF";
 			sets.proxima = proxima, sets.adc_line = adc;
+			nvs_write_sets();
 			init_sets(); //return true;
 		};
 	} 
@@ -572,21 +580,21 @@ bool update_adc_sets(cch* data,  String& text) {
 		if(!strncmp(data, "open_", sizeof("open_")-1)) {
 			data += sizeof("open_")-1;
 			if((res = atoi(data)) > 0 && res < 4095) {
-				gerkon_open_high = res;
-				text = "gerkon_open_default = "; text += res;
+				gerkon_open_def = res;
+				text = "gerkon_open_def = "; text += res;
 			} else goto error;
 		}
 		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
 			data += sizeof("close_")-1;
 			if((res = atoi(data)) > 0 && res < 4095) {
-				gerkon_close_low = res;
-				text = "gerkon_close_default = "; text += res;
+				gerkon_close_def = res;
+				text = "gerkon_close_def = "; text += res;
 			} else goto error;
 		} else if(!strncmp(data, "button_", sizeof("button_")-1)) {
 			data += sizeof("button_")-1;
 			if((res = atoi(data)) > 0 && res < 4095) {
-				gerkon_button_low = res;
-				text = "gerkon_button_default = "; 
+				gerkon_button_def = res;
+				text = "gerkon_button_def = "; 
 			} else goto error;
 		} else if(!strncmp(data, "percent_", sizeof("percent_")-1)) {
 			data += sizeof("percent_")-1;
@@ -607,10 +615,8 @@ void read_credentials() {
 	wifi_config_t config {};  size_t ssid_l, pass_l;
 	esp_wifi_get_config(WIFI_IF_STA, &config);log_d("%s\tpass: %s", config.sta.ssid,config.sta.password);
 	ssid_l = strlen((char*)config.sta.ssid); pass_l = strlen((char*)config.sta.password);
-	for (size_t i = 0; i < 16; i++) putchar((config.sta.ssid)[i]);
-	for (size_t i = 0; i < 16; i++) putchar((config.sta.password)[i]);
-	putchar('\r');putchar('\n');
-	
+	//for (size_t i = 0; i < 16; i++) putchar((config.sta.ssid)[i]);
+	//for (size_t i = 0; i < 16; i++) putchar((config.sta.password)[i]);
 	if (ssid_l < 1 || pass_l < 8) {
 		log_w("ssid len %u, pass len %u", ssid_l, pass_l);
   		config.sta.threshold.rssi = -127;
@@ -656,16 +662,19 @@ String get_info(bool ver) {
 	uint32_t heap = ESP.getFreeHeap(); uint32_t sec = uS / 1000000;
 	String str; str.reserve(400);
 	str += "Connected to: "; str += WiFi.SSID(); str += "\nLocal IP: "; str += WiFi.localIP().toString(); str += "\nRSSI: "; str += WiFi.RSSI();
-	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; str += "\nmain "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
+	str += "\nFree Heap: "; str += heap; str += "\nStack watermark:"; 
+	str += "\nmain "; str += uxTaskGetStackHighWaterMark2(loopTaskHandle);
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 #ifdef CONFIG_GENERIC_LINE
-	str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcTaskHandle);
+	if(adcTaskHandle) {str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcTaskHandle);}
+	if(curr_adc_ptr) { 
 	str += "\nADC value "; str +=  *curr_adc_ptr;
 	str += "\ngerkon_open_high = "; str += gerkon_open_high;
 	str += "\ngerkon_close_high = "; str += gerkon_close_high;
 	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
 	str += "\ngerkon_button_low = ";  str += gerkon_button_low;
 	str += "\ngerkon_percent_drift = ";  str += gerkon_percent_drift;
+	}
 #endif
 	//str += "\ninterrupt_delta =  "; str += interrupt_delta;
 	//sets.relay = RELAY_STATE(dRead(PIN_RELAY));
@@ -689,29 +698,33 @@ void init_sets() {
 		assert(timer_sab = timer_init(TIMER_SABOTAGE, sabotage_timer));
 		assert(timer_intr = esp_timer_init([](void*) { enableInterrupt(PIN_LINE); } ));
 		attachInterrupt(PIN_LINE, &isr_handler, GPIO_INTR_NEGEDGE);
-	} else if(!sets.proxima && timer_sab){ 
-		detachInterrupt(PIN_LINE);
-		CHECK_(esp_timer_delete(timer_intr));
-		CHECK_(gptimer_stop(timer_sab));
-		CHECK_(gptimer_disable(timer_sab));
-		CHECK_(gptimer_del_timer(timer_sab));
-		timer_sab = NULL;
+	} else if(!sets.proxima && timer_sab) {
+		Flag = RESTART;
+		//detachInterrupt(PIN_LINE);
+		//CHECK_(esp_timer_delete(timer_intr));
+		//CHECK_(gptimer_stop(timer_sab));
+		//CHECK_(gptimer_disable(timer_sab));
+		//CHECK_(gptimer_del_timer(timer_sab));
+		//timer_sab = NULL;
 	}
 #endif
 #ifdef CONFIG_GENERIC_LINE
 	if(sets.adc_line && !adc_handle) {
+		init_adc_values();
+		assert(xTaskCreate(adcReadTask, "adc", 2048, NULL, 2, &adcTaskHandle));
 		adc_channel_t channel[] = { PIN_ADC_LINE }; int size = sizeof(channel)/sizeof(adc_channel_t);
-		assert(adc_handle = continuous_adc_init(conv_done_cb, channel, size, BUF_ADC_SIZE)); 
+		adc_handle = continuous_adc_init(conv_done_cb, channel, size, BUF_ADC_SIZE); 
 		//ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
 		gpio_config_t conf = { BIT(PIN_ADC_LINE) | BIT(PIN_ADC_PULLUP) | BIT(PIN_ADC_PULLUP2), GPIO_MODE_INPUT, GPIO_PULLUP_ENABLE };
 	    gpio_config(&conf);
-		vTaskResume(adcTaskHandle);
+		//vTaskResume(adcTaskHandle);
 	}
 	else if (!sets.adc_line && adc_handle) {
-		vTaskSuspend(adcTaskHandle);
-		CHECK_(adc_continuous_stop(adc_handle)); 
-		CHECK_(adc_continuous_deinit(adc_handle));
-		adc_handle = NULL;
+		Flag = RESTART;
+		//vTaskSuspend(adcTaskHandle);
+		//CHECK_(adc_continuous_stop(adc_handle)); //error
+		//CHECK_(adc_continuous_deinit(adc_handle));
+		//adc_handle = NULL;
 	}
 #endif
 }
