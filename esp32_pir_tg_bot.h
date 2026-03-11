@@ -16,7 +16,7 @@
 #define CONFIG_ASYNC_TCP_USE_WDT 0
 #include <AsyncTCP.h>
 //#define USE_ESP_IDF_LOG
-//#define DEBUG_ENABLE 893750 891442
+#define DEBUG_ENABLE 893750 891442
 #include "ESP_MAIN.h"
 #include "FastBot2.h"
 #include "SPIFFS.h"
@@ -50,8 +50,8 @@ static_assert(sizeof(time_t) == 4);
 #define SAMPLE_BUF				64
 #define ADC_TASK_FREQ			10
 #define BUF_ADC_SIZE			(SAMPLE_BUF * SOC_ADC_DIGI_RESULT_BYTES)
-#define RELAY_STATE(x) (!x)
-#define DEF_SWITCH_DELAY (900)
+#define RELAY_STATE(x) (!x) //p-channel mosfet
+#define DEF_SWITCH_DELAY (1000)
 #if defined ESP32C3_LUATOS
 //#define PIN_PULLUP 5
 #define PIN_LED_D5 13
@@ -74,11 +74,12 @@ static_assert(sizeof(time_t) == 4);
 #define LED_OFF LOW
 #endif
 #define TAG "MAIN"
-
+#define FUN __FUNCTION__
+ 
 #define MAIN_TASK_STACK_SIZE (8 * 1024)
 #define SEND_TASK_STACK_SIZE (8 * 1024)
 #define QUEUE_ITEM_SIZE (sizeof(tgMsg_t))
-#define QUEUE_LEN 32
+#define QUEUE_LEN 16
 
 #if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2
 #define EXAMPLE_ADC_OUTPUT_TYPE             ADC_DIGI_OUTPUT_FORMAT_TYPE1
@@ -126,8 +127,8 @@ typedef struct { byte alarm, proxima, adc_line, relay;} sets_t;
 static_assert(sizeof(sets_t) == 4);
 typedef struct { String ssid,pass; } auth_t;
 
-StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE], xAdcReadStack[4096];
-StaticTask_t xMainTaskBuffer, xSendTaskBuffer, xAdcReadBuffer;
+StackType_t xMainStack[MAIN_TASK_STACK_SIZE], xSendStack[SEND_TASK_STACK_SIZE];
+StaticTask_t xMainTaskBuffer, xSendTaskBuffer;
 TaskHandle_t loopTaskHandle, sendTaskHandle, adcTaskHandle;
 
 uint8_t QueueMsgStorage[QUEUE_LEN * QUEUE_ITEM_SIZE];
@@ -136,13 +137,17 @@ QueueHandle_t QueueMsgHandle;
 
 __unused adc_continuous_handle_t adc_handle = NULL;
 __unused uint8_t adc_buf[BUF_ADC_SIZE];
-uint32_t* curr_adc_ptr = NULL;
+const uint32_t* ptr_curr_adc = NULL;
 
-uint16_t gerkon_open_high = ADC_OPEN_DEF;
+uint16_t gerkon_open_high = 0;
 uint16_t gerkon_close_high = 0;
-uint16_t gerkon_close_low = ADC_CLOSE_DEF;
-uint16_t gerkon_button_low = ADC_BUTTON_DEF;
+uint16_t gerkon_close_low = 0;
+uint16_t gerkon_button_low = 0;
 uint8_t gerkon_percent_drift = ADC_PERCENT_DEF;
+
+uint16_t gerkon_open_def = ADC_OPEN_DEF;
+uint16_t gerkon_close_def = ADC_CLOSE_DEF;
+uint16_t gerkon_button_def = ADC_BUTTON_DEF;
 
 //StaticTimer_t  xTimerIntrBuffer/* , xTimerSabBuffer */;
 esp_timer_handle_t timer_intr, timer_pwr;
@@ -168,6 +173,11 @@ FastBot2 botSend(BOT_TOKEN);
 #endif
 AsyncWebServer server(80);
 
+static struct msg_id_s {
+	uint32_t id;
+	uint16_t crc;
+} msg_id __attribute__((section(".noinit." "1")));
+
 void mainTask(void*);
 void sendTask(void*);
 void sabotageCallback(TimerHandle_t);
@@ -190,7 +200,7 @@ void get_task_list(String& str);
 String get_task_list() { String str; get_task_list(str); return str;}
 String get_info(bool ver = false);
 void wifi_server_init();
-bool wifi_sta_init(uint32_t = 5 * (1000 / STA_INIT_DELAY));
+bool wifi_sta_init(uint32_t = 10 * (1000 / STA_INIT_DELAY));
 void wifi_ap_init();
 void onConfigRequest(AsyncWebServerRequest* request);
 esp_err_t ble_advertising(cbyte* ble_data, cbyte ble_data_length, uint32_t time_ms = 500);
@@ -204,12 +214,14 @@ void create_hex_string(String& str, cbyte* buf, cbyte data_size);
 String create_hex_string(cbyte* buf, cbyte data_size) {
 	String str; create_hex_string(str,buf,data_size); return str;
 };
-uint32_t generate_pin(const char *str, byte name_len, String& pass);
+uint32_t generate_pin(const char *str, byte name_len, const String& pass);
 
 
 void nvs_read_sets();
 void nvs_write_sets(nvsApi nvs = nvsApi(NVS_WIFI_SPACE, NVS_READWRITE));
+void init_adc_values();
 void init_sets();
+void noinit_check();
 bool update_adc_sets(cch* data,  String & text);
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
@@ -220,15 +232,6 @@ bool auth_handler(AsyncWebServerRequest*& request) {
 			return false;
 	}
 	return true;
-}
-
-void init_adc_values() { 
-	gerkon_open_high = gerkon_open_high / 100.f * (100 + gerkon_percent_drift);
-	gerkon_close_high = gerkon_close_low / 100.f * (100 + gerkon_percent_drift);
-	gerkon_close_low = gerkon_close_low / 100.f * (100 - gerkon_percent_drift);
-	gerkon_button_low = gerkon_button_low / 100.f * (100 - gerkon_percent_drift);
-	ESP_LOGI(TAG, "open_high %u, close_high %u, close_low %u, adc_button_low %u", 
-		gerkon_open_high, gerkon_close_high, gerkon_close_low, gerkon_button_low);
 }
 
 void ota_progress(size_t progress, size_t size) {
@@ -397,7 +400,7 @@ void sabotageCallback(TimerHandle_t xTimer) {
 	xQueueSend(QueueMsgHandle, &tmp, 0);
 }
 
-uint32_t generate_pin(const char *str, byte name_len, String &pass) {
+uint32_t generate_pin(const char *str, byte name_len, const String &pass) {
     //const byte name_len = strlen(str); 
 	if(!str || !pass.c_str() ) return 0;
 	const byte pass_len = pass.length();
