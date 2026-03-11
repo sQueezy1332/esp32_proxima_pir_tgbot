@@ -1,11 +1,13 @@
 #include "esp32_pir_tg_bot.h"
 /*		INIT	*/
+extern "C" void port_start_app_hook() { if(esp_reset_reason() == ESP_RST_POWERON) ets_delay_us(500'000); }
 extern "C" void app_main() {
 	main_init();//nvs_func();
 	dWrite(PIN_LINE, 1);pinMode(PIN_LINE, PULLUP | OUTPUT_OPEN_DRAIN);//dWrite(PIN_PULLUP, 1); pinMode(PIN_PULLUP, OUTPUT); 
 	AutoLed<PIN_LED> led; pinMode(PIN_LED,OUTPUT);
 	QueueMsgHandle = xQueueCreateStatic(QUEUE_LEN, QUEUE_ITEM_SIZE, QueueMsgStorage, &xStaticQueue);
 	nvs_read_sets();
+	//noinit_check();
 	//read_credentials();
 	init_sets();
 	sets.alarm ? alarm_on(false) : alarm_off(false);
@@ -26,15 +28,14 @@ extern "C" void app_main() {
 	configTzTime("MSK-3", "pool.ntp.org", "time.nist.gov"); 
 	//sntp_set_time_sync_notification_cb(); //time_sync();//setenv("TZ", "MSK-3", 1); tzset();
 	bot.attachUpdate(updateHandler);
+    bot.skipUpdates();
 	bot.skipNextMessage();
 	bot.setPollMode(fb::Poll::Long, 30000);
-	botSend.client.setHandshakeTimeout(10); bot.client.setHandshakeTimeout(15);
-	//vTaskPrioritySet(NULL, 12);
+	botSend.client.setHandshakeTimeout(5); bot.client.setHandshakeTimeout(15);
+	vTaskPrioritySet(NULL, 12);
 	loopTaskHandle = xTaskCreateStatic(mainTask, "main", sizeof(xMainStack), NULL, 9, xMainStack, &xMainTaskBuffer);
-	vTaskSuspend(loopTaskHandle);
 	sendTaskHandle = xTaskCreateStatic(sendTask, "send", sizeof(xSendStack), NULL, 11, xSendStack, &xSendTaskBuffer);
 	ESP_LOGI(TAG, "StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
-	vTaskResume(loopTaskHandle); /* vTaskResume(sendTaskHandle); */
 }
 
 void mainTask(void*) {
@@ -43,15 +44,13 @@ void mainTask(void*) {
 		case RESEND_MSG: 
 		if (xTaskGetTickCount() - lastTry > pdMS_TO_TICKS(15 * 60 * 1000)) {
 			if(send_alarm_time()) { Flag = CHECK_MSG; }
-			lastTry = xTaskGetTickCount(); log_i("%u", Flag);
+			lastTry = xTaskGetTickCount(); ESP_LOGI(FUN, "%u", Flag);
 		}
 		case CHECK_MSG: { 
 			AutoLed <PIN_LED_D5> led;
 			if (wifi_sta_init()) { 
 				delay(10); 
-				if(bot.tick()) {
-
-				};
+				if(bot.tick()) {}
 			} 
 		}
 			delay(FB_LONG_POLL_TOUT - 10);continue;
@@ -62,17 +61,20 @@ void mainTask(void*) {
 			}
 			ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(60 * 60 * 1000));
 		case WIFI_RECON: 
-			if (wifi_sta_init()) { bot.tickManual(); } continue;
+			if (wifi_sta_init()) { if (bot.tickManual()) Flag = CHECK_MSG; } 
+			continue;
 		case WIFI_INIT: WiFi.begin(Auth->ssid, Auth->pass);
 			delete Auth; Auth = nullptr;
 			Flag = CHECK_MSG; continue;
-		case RESTART: bot.tickManual(); esp_restart(); return;
-		default: vTaskDelay(1);  ESP_LOGI("main",""); Flag = CHECK_MSG;
+		case RESTART: bot.tickManual(); //for prevention bootloop
+			esp_restart(); return;
+		default: delay(1000); ESP_LOGI(FUN,""); Flag = CHECK_MSG;
 		}
 	}
 }
 
 void sendTask(void*) {
+	ESP_LOGI(FUN,"");
 	Message msg(get_info(true), CHAT_ID); tgMsg_t event; TickType_t tick = 0;
 	botSend.sendMessage(std::move(msg));
 	send_alarm_time(std::move(msg), botSend, false);
@@ -99,16 +101,16 @@ void sendTask(void*) {
 				vTaskDelayUntil(&tick, pdMS_TO_TICKS(1000)); tick = xTaskGetTickCount();
 				ESP_LOGI("sendTask()","%s", msg.text.c_str()); //if(!dRead(PIN_BUTTON)) goto save;
 				if (botSend.sendMessage(msg)) {
-					if(Flag > CHECK_MSG) resumeTask(); log_v(""); 
+					if(Flag > CHECK_MSG) resumeTask(); ESP_LOGD(FUN, ""); 
 					continue;
 				}
 				else {
-					log_w("try again"); delay(2000);
+					ESP_LOGW(FUN, "try again"); delay(2000);
 					if (botSend.sendMessage(msg)) { tick = xTaskGetTickCount(); continue; }
-				} log_d("%u", ESP.getFreeHeap());
+				} ESP_LOGD(FUN,"%u", ESP.getFreeHeap());
 			}
 			else if (!event_id) event_id = WiFi.onEvent(onWiFiConnected);
-save:		if (event.status != ok) { log_i("save");
+save:		if (event.status != ok) { ESP_LOGI(FUN, "save");
 				appendFile(ALARM_PATH, time(NULL));
 				if(Flag != RESEND_MSG) resumeTask(RESEND_MSG); 
 			}
@@ -118,7 +120,7 @@ save:		if (event.status != ok) { log_i("save");
 
 void adcReadTask(void*) { 
 	const adc_digi_output_data_t *p; tgMsg_t out {};
-	uint32_t ret_num, val, i, last_sw = 0; curr_adc_ptr = &val;
+	uint32_t ret_num, val, i, last_sw = 0; ptr_curr_adc = &val;
 	for(;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         //TickType_t now =  xTaskGetTickCount(); ESP_LOGD("TIME", "%lu", pdTICKS_TO_MS(now - last)); last = now;
@@ -218,16 +220,17 @@ static bool sabotage_timer(gptimer_handle_t tmr, const gptimer_alarm_event_data_
 /*		FILE SYSTEM	*/
 
 bool send_alarm_time(Message&& msg, FastBot2& _bot, bool no_file) {
-	ESP_LOGI(TAG, "Reading file: %s", ALARM_PATH); //sizeof(Message);108
+	 //sizeof(Message);108
 	String& str = msg.text; File file = SPIFFS.open(ALARM_PATH, FILE_READ);
-	if (!file || file.isDirectory() || !file.available()) {
-		DEBUGLN(" failed to open file for reading");
+	bool not_readed = !file || file.isDirectory() || !file.available();
+	if (not_readed) {
 		if (no_file) { str = "No file"; _bot.sendMessage(msg); }
 		return true;
 	}
+	ESP_LOGI(FUN, "Reading file: %s\t%s", ALARM_PATH, not_readed ? "failed" : "success");
 	const uint32_t file_size = file.size(), count = file_size / sizeof(time_t), str_len = 18 * count, heap = ESP.getFreeHeap();
 	__unused char* ptr; size_t offset; time_t timestamp = 0; __unused int tm_yday_last = 0;
-	log_i("file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
+	ESP_LOGD(FUN, "file_size %u, count %u, str_len %u, HEAP %u", file_size, count, str_len, heap);
 	if (!str.reserve(str_len) /*|| heap - 5000 < str_len*/) {
 		str = "file_size "; str += file_size; str += "\ncount ";
 		str += count; str += "\nstr_len "; str += str_len; str += "\nHEAP "; str += heap;
@@ -309,11 +312,11 @@ bool deleteFile(cch* path) {
 bool wifi_sta_init(uint32_t timer) {//WiFi.begin()
 	if (WiFi.isConnected() == false) {
 		if (!WiFi.STA.begin(true)) return false;
-		wl_status_t status;  ESP_LOGI(TAG, "Wait connection %u ms", STA_INIT_DELAY * timer);
+		wl_status_t status;  ESP_LOGI(FUN, "Wait connection %u ms", STA_INIT_DELAY * timer);
 		for (; (status = WiFi.status()) != WL_CONNECTED; timer--) {
 			if (timer == 0) { ESP_LOGW(TAG, "Not connected"); return false; }
 			delay(STA_INIT_DELAY); DEBUG(status); DEBUG(' ');
-		} ESP_LOGI(TAG, "status: %u timer: %u", status, timer);
+		} ESP_LOGI(FUN, "status: %u timer: %u", status, timer);
 	}
 	return true;
 }
@@ -326,7 +329,7 @@ void wifi_ap_init() {
 	WiFi.softAP(AP_SSID, AP_PASS, AP_WIFI_CHANNEL, SSID_HIDDEN);
 	WiFi.setTxPower(WIFI_POWER_20dBm); DEBUGLN(WiFi.getTxPower()); //WIFI_POWER_20dBm = 80,// 20dBm
 	WiFi.softAPbandwidth(WIFI_BW_HT20);
-	DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());DEBUGLN();
+	//DEBUGLN("\nAP running"); DEBUGLN(AP_SSID); DEBUGLN(AP_PASS); DEBUG("My IP address: "); DEBUGLN(WiFi.softAPIP());DEBUGLN();
 }
 
 void onWiFiConnected(arduino_event_id_t event) {
@@ -357,7 +360,7 @@ void onConfigRequest(AsyncWebServerRequest* request) {
 }
 /*		TELEGRAM	*/
 void handleMessage(fb::Update& u) {
-	Message msg("",u.message().chat().id()); DEBUGLN(u.message().text());
+	Message msg("",u.message().chat().id()); //DEBUGLN(u.message().text());
 	switch (u.message().text().hash()) {
 	case SH("/connect"):
 		Flag = CHECK_MSG; msg.text = "Stay connected"; break;
@@ -370,11 +373,11 @@ void handleMessage(fb::Update& u) {
 	case SH("/info"):
 		msg.text = std::move(get_info()); break;
 	case SH("/adc"):
-		msg.text = "ADC value = "; msg.text += *curr_adc_ptr; break;
+		msg.text = "ADC value = "; msg.text += *ptr_curr_adc; break;
 	case SH("/task_list"):
 		get_task_list(msg.text); break;
 	case SH("/restart"): //esp_restart();
-		bot.reboot(); Flag = RESTART; msg.text = "Restarting..."; break;
+		/* bot.reboot(); */ Flag = RESTART; msg.text = "Restarting..."; break;
 	case SH("/time_sync"): {
 		timeval val {.tv_sec = time(NULL)};
 		settimeofday(&val, NULL);
@@ -396,16 +399,18 @@ void handleMessage(fb::Update& u) {
 	/* case SH("/pir_reset"):
 		 pir_reset(); msg.text = "Done"; break; */
 	case SH("/bot_kill"): {memset((void*)&bot, 0, sizeof(botSend)); } break;
-	//case SH("/die"): Flag = PANIC; msg.text = "/die"; break;
+	case SH("/abort"): { abort(); }
+	
+	break;
 		//case SH("/ota_invalidate"):
 		//msg.text = (int)esp_ota_invalidate_inactive_ota_data_slot(); break;
 		//case SH("/timer_count"): {uint64_t count = 0; gptimer_get_raw_count(timer_sab, &count);msg.text = String(count /= 1000); } break;
 		//case SH("/nvs_erase"): nvs_wifi_erase(); break;
 #if defined RELAY
 	case SH(RELAY_ON): {
-		const int new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
-		dWrite(PIN_RELAY, new_state); msg.text = "RELAY "; 
-		msg.text += RELAY_STATE(new_state) ? '1' : '0';
+		const auto new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
+		dWrite(PIN_RELAY, new_state); 
+		//msg.text = "RELAY "; msg.text += RELAY_STATE(new_state) ? 'ON' : 'OFF';
 	} break;
 #endif
 #ifndef FIRST_BUILD
@@ -454,7 +459,10 @@ void handleMessage(fb::Update& u) {
 #else 
 	default: {
 #ifdef CONFIG_GENERIC_LINE
-		if(update_adc_sets(u.message().text()._str, msg.text)) break;
+		{cch* str = u.message().text()._str;
+		if(str && *str) { if(update_adc_sets(str, msg.text)) break; }}
+		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin"))
+			return handleDocument(u);
 #endif
 		msg.text = "Unknown";
 	}
@@ -465,7 +473,7 @@ void handleMessage(fb::Update& u) {
 }
 
 void handleDocument(fb::Update& u) {
-	switch (u.message()[tg_apih::caption].hash()) {
+	switch (u.message().caption().hash()) {
 	case SH("/fw"): otaBegin(u, &Fetcher::updateFlash); break;
 	case SH("/filesystem"): otaBegin(u, &Fetcher::updateFS); break;
 	default: bot.sendMessage(Message("Unknown", u.message().chat().id()));
@@ -490,16 +498,25 @@ void otaBegin(fb::Update& u, bool(Fetcher::*updater)()) {
 	ESP_LOGI(FUN, msg.text.c_str());
 	bot.sendMessage(msg);
 	if(temp) alarm_on(false); 
-	vTaskResume(sendTaskHandle); vTaskResume(adcTaskHandle);
+	vTaskResume(sendTaskHandle);
 	ESP_LOGD(FUN, "StackHighWaterMark: %u", uxTaskGetStackHighWaterMark2(NULL));
 }
 
 void updateHandler(fb::Update& u) {
+#ifdef DEBUG_ENABLE
+	u.entry.printTo(Serial);
+#endif
 	if (u.isMessage() && u.message().from().id() == USER_ID) {
-		if (Flag > CHECK_MSG) Flag = CHECK_MSG;
-		if (u.message().hasDocument() && u.message().document().name().endsWith(".bin"))
-			handleDocument(u);
-		else handleMessage(u);
+		auto reason = esp_reset_reason();
+		uint32_t id = u.id();
+		if(reason >= ESP_RST_PANIC && reason <= ESP_RST_WDT) {
+			if(id == msg_id.id) {
+				ESP_LOGW(FUN, "msg_id: %lu PANIC", id);
+				return;
+			}
+		}
+		msg_id.id = id; //msg_id.crc = crc16_le(0, (uint8_t*)&msg_id.id, sizeof(size_t));
+		handleMessage(u);
 	}
 }
 
@@ -546,7 +563,7 @@ void wifi_server_init() {
 		, ota_progress
 #endif // DEBUG_ENABLE
 	);
-	server.begin(); log_v("server.begin()");
+	server.begin(); ESP_LOGV("server.begin()","");
 }
 /*		BLUETOOTH		*/
 #ifndef NO_BLE
@@ -581,14 +598,14 @@ bool update_adc_sets(cch* data,  String& text) {
 			data += sizeof("open_")-1;
 			if((res = atoi(data)) > 0 && res < 4095) {
 				gerkon_open_def = res;
-				text = "gerkon_open_def = "; text += res;
+				text = "gerkon_open_def = ";
 			} else goto error;
 		}
 		else if(!strncmp(data, "close_", sizeof("close_")-1)) {
 			data += sizeof("close_")-1;
 			if((res = atoi(data)) > 0 && res < 4095) {
 				gerkon_close_def = res;
-				text = "gerkon_close_def = "; text += res;
+				text = "gerkon_close_def = ";
 			} else goto error;
 		} else if(!strncmp(data, "button_", sizeof("button_")-1)) {
 			data += sizeof("button_")-1;
@@ -613,16 +630,22 @@ error: text = "WRONG INPUT"; return true;
 
 void read_credentials() {
 	wifi_config_t config {};  size_t ssid_l, pass_l;
-	esp_wifi_get_config(WIFI_IF_STA, &config);log_d("%s\tpass: %s", config.sta.ssid,config.sta.password);
+	esp_wifi_get_config(WIFI_IF_STA, &config);ESP_LOGD(FUN,"%s\tpass: %s", config.sta.ssid,config.sta.password);
 	ssid_l = strlen((char*)config.sta.ssid); pass_l = strlen((char*)config.sta.password);
 	//for (size_t i = 0; i < 16; i++) putchar((config.sta.ssid)[i]);
 	//for (size_t i = 0; i < 16; i++) putchar((config.sta.password)[i]);
 	if (ssid_l < 1 || pass_l < 8) {
-		log_w("ssid len %u, pass len %u", ssid_l, pass_l);
+		ESP_LOGW(FUN,"ssid len %u, pass len %u", ssid_l, pass_l);
   		config.sta.threshold.rssi = -127;
 		memcpy(config.sta.ssid, DEFAULT_SSID, sizeof(DEFAULT_SSID));
 		memcpy(config.sta.password, DEFAULT_PASS, sizeof(DEFAULT_PASS));
 		esp_wifi_set_config(WIFI_IF_STA, &config);
+	}
+}
+void noinit_check() {
+	if(crc32_le(0, (uint8_t*)&msg_id.id, 4) != msg_id.crc) {
+		msg_id.id = 0;
+		msg_id.crc = crc32_le(0, (uint8_t*)&msg_id.id, 4);
 	}
 }
 
@@ -667,8 +690,8 @@ String get_info(bool ver) {
 	str += "\nsend "; str += uxTaskGetStackHighWaterMark2(sendTaskHandle);
 #ifdef CONFIG_GENERIC_LINE
 	if(adcTaskHandle) {str += "\nadc "; str += uxTaskGetStackHighWaterMark2(adcTaskHandle);}
-	if(curr_adc_ptr) { 
-	str += "\nADC value "; str +=  *curr_adc_ptr;
+	if(ptr_curr_adc) { 
+	str += "\nADC value "; str +=  *ptr_curr_adc;
 	str += "\ngerkon_open_high = "; str += gerkon_open_high;
 	str += "\ngerkon_close_high = "; str += gerkon_close_high;
 	str += "\ngerkon_close_low = ";  str += gerkon_close_low;
@@ -680,15 +703,17 @@ String get_info(bool ver) {
 	//sets.relay = RELAY_STATE(dRead(PIN_RELAY));
 	//str += "\nSettings 0x"; str += String(reinterpret_cast<uint32_t&>(sets), HEX);
 	str += "\nSettings:\nalarm "; str += sets.alarm, str += "; proxima "; 
-	str += sets.proxima; str += "; adc_line "; str += sets.adc_line; str += ";relay "; str += sets.relay;
+	str += sets.proxima; str += "; adc_line "; str += sets.adc_line; str += "; relay "; str += sets.relay;
 	//str += "\nMode_";  str += sets.alarm; str += sets.proxima; str += sets.adc_line, str += sets.relay;
 	if(sets.proxima/* last_interrupt != 0xFFFFFF */) { str += "\nlast_interrupt: "; str += last_interrupt; }
 	str += "\nUptime: "; str += sec / 3600 / 24;  str += "d "; str += sec / 3600 % 24; str += "h "; str += sec / 60 % 60; str += "m "; str += sec % 60; str += "s";
 	str += "\nUnix time: "; str += (unsigned)time(NULL);//(timestamp_unix + ((uS - time_sync_unix) / 1000000ul));
 	if (ver) {
 		if (img_state(false) == ESP_OTA_IMG_PENDING_VERIFY) { str += "\nESP_OTA_IMG_PENDING_VERIFY"; }
+		const auto res = esp_reset_reason();
+		if(res != ESP_RST_POWERON) { str += "\nReset_reason = "; str += res; }
 		str += ("\nCompiled: " __TIMESTAMP__ "\n");
-	} ESP_LOGD("get_info","%u", str.length());
+	} ESP_LOGD(FUN, "str.length ","%u", str.length());
 	return str;
 }
 
@@ -729,9 +754,18 @@ void init_sets() {
 #endif
 }
 
+void init_adc_values() { 
+	gerkon_open_high = gerkon_open_def / 100.f * (100 + gerkon_percent_drift);
+	gerkon_close_high = gerkon_close_def / 100.f * (100 + gerkon_percent_drift);
+	gerkon_close_low = gerkon_close_def / 100.f * (100 - gerkon_percent_drift);
+	gerkon_button_low = gerkon_button_def / 100.f * (100 - gerkon_percent_drift);
+	ESP_LOGI(FUN, "open_high %u, close_high %u, close_low %u, adc_button_low %u", 
+		gerkon_open_high, gerkon_close_high, gerkon_close_low, gerkon_button_low);
+}
+
 void alarm_on(bool write) {
 #ifdef CONFIG_PROXIMA_PIR
-	if(sets.proxima) {  enableInterrupt(PIN_LINE); timer_start_impl(); ESP_LOGI(TAG, "ALARM_ON"); }
+	if(sets.proxima) {  enableInterrupt(PIN_LINE); timer_start_impl(); ESP_LOGI(FUN, ""); }
 #endif
 #ifdef CONFIG_GENERIC_LINE
 	if(sets.adc_line) { /* nothing */  } else {/* nothing */ }
@@ -745,7 +779,7 @@ void alarm_on(bool write) {
 void alarm_off(bool write) {
 #ifdef CONFIG_PROXIMA_PIR
 	if(sets.proxima) { 
-		disableInterrupt(PIN_LINE); timer_stop_impl();  ESP_LOGI(TAG, "ALARM_OFF");
+		disableInterrupt(PIN_LINE); timer_stop_impl();  ESP_LOGI(FUN, "");
 	}
 #endif
 #ifdef CONFIG_GENERIC_LINE
@@ -760,7 +794,7 @@ void alarm_off(bool write) {
 void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
 	const size_t str_size = data_size * 3;
 	if (!str.reserve(str_size)) return; //log_d("%u", str.isSSO());
-	char* ptr = str.begin(); if(!ptr) { log_d("NULL"); return; }
+	char* ptr = str.begin(); if(!ptr) { ESP_LOGD(FUN, "NULL"); return; }
 	byte *field = reinterpret_cast<byte*>(&str) + (sizeof(String) -1); static_assert(sizeof(String) == 16);
 	if(*field & 0x80) { *field = (str_size | 0x80); }// SSO
 	else reinterpret_cast<uint32_t*>(&str)[2] = str_size;
@@ -772,11 +806,11 @@ void create_hex_string(String& str, cbyte* buf, cbyte data_size) {
 		} 
 		if (++i >= data_size) break;
 	}*ptr = '\0';
-	log_d("str.length: %u, data_size: %u", str.length(), data_size);
+	ESP_LOGD(FUN,"str.length: %u, data_size: %u", str.length(), data_size);
 }
 
 bool strtoB(const String& str, byte*& buf, byte & data_size, byte sub, bool heap) { 
-	size_t str_len = str.length() - sub, hex_len = (str_len + 1) / 2; log_d("hex_len = %u", hex_len);
+	size_t str_len = str.length() - sub, hex_len = (str_len + 1) / 2; ESP_LOGD(FUN,"hex_len = %u", hex_len);
 	if (hex_len < 4 || hex_len > 255) return false;
 	byte i = 0; cch* ptr = str.c_str() + sub;
 	byte* _buf = (byte*)realloc(buf, hex_len); if (_buf == NULL) return false; buf = _buf;
