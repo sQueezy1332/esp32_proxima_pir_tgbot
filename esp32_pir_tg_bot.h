@@ -14,11 +14,11 @@
 #define MBEDTLS_DEBUG_C
 #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #define CONFIG_ASYNC_TCP_USE_WDT 0
-#include <AsyncTCP.h>
 //#define USE_ESP_IDF_LOG
 #define DEBUG_ENABLE 893750 891442
 #include "ESP_MAIN.h"
 #include "FastBot2.h"
+#include <AsyncTCP.h>
 #include "SPIFFS.h"
 #include "esp_wifi.h"
 #include "rom/crc.h"
@@ -175,7 +175,7 @@ AsyncWebServer server(80);
 
 static struct msg_id_s {
 	uint32_t id;
-	uint16_t crc;
+	//uint16_t crc;
 } msg_id __attribute__((section(".noinit." "1")));
 
 void mainTask(void*);
@@ -221,7 +221,6 @@ void nvs_read_sets();
 void nvs_write_sets(nvsApi nvs = nvsApi(NVS_WIFI_SPACE, NVS_READWRITE));
 void init_adc_values();
 void init_sets();
-void noinit_check();
 bool update_adc_sets(cch* data,  String & text);
 void alarm_on(bool write = true);
 void alarm_off(bool write = true);
@@ -243,6 +242,17 @@ void ota_progress(size_t progress, size_t size) {
 	}
 }
 
+void push_power_sw(uint32_t time = 100 * 1000) {
+	if(esp_timer_start_once(timer_pwr, time) == ESP_OK)
+	{ dWrite(PIN_PWR_BUTTON, 0); }
+}	
+
+bool toggle_relay_state() {
+		const bool new_state = !dRead(PIN_RELAY); sets.relay = RELAY_STATE(new_state);
+		dWrite(PIN_RELAY, new_state);
+		return RELAY_STATE(new_state);
+} 
+
 /* void pir_reset() {
 	gpio_set_drive_capability((gpio_num_t)PIN_LINE, GPIO_DRIVE_CAP_3);  dWrite(PIN_LINE, 0); //OPEN_DRAIN
 	xTimerStart(xTimerCreate("", pdMS_TO_TICKS(60 * 1000), pdFALSE, NULL, [](TimerHandle_t xTimer) {
@@ -263,6 +273,13 @@ inline void led_blink() {
 	dWrite(PIN_LED_D5, state = !state);
 #endif
 }
+
+/*void noinit_check() {
+	if(crc32_le(0, (uint8_t*)&msg_id.id, 4) != msg_id.crc) {
+		msg_id.id = 0;
+		msg_id.crc = crc32_le(0, (uint8_t*)&msg_id.id, 4);
+	}
+}*/
 
 
 //bool verifyRollbackLater() { return true; };
